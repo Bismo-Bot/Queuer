@@ -204,7 +204,7 @@ module.exports = {
 		packageName: "com.watsuprico.youtube",
 		author: "Watsuprico",
 		date: "02/28/2021",
-		version: "1"
+		version: "1.0.10"
 	},
 	api: Plugin
 }
