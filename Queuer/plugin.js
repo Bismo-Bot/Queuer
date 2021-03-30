@@ -931,14 +931,19 @@ Plugin.createQueue = function(queueID, queueData) {
 				serverQueue.notify();
 			} else {
 				// At the end.
-				queue.playbackMessage.edit("Queue finished.");
+				try {
+					queue.playbackMessage.edit("Queue finished.");
+				} catch(e) {}
+				
 				queue.paused = true;
 				queue.currentSong = 0;
 
 			}
 		} else {
 			if (queue.currentSong >= queue.songs.length) {
-				queue.playbackMessage.edit("Queue finished.");
+				try {
+					queue.playbackMessage.edit("Queue finished.");
+				} catch(e) {}
 				queue.paused = true;
 				queue.currentSong = 0;
 
