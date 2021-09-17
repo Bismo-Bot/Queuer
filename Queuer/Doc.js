@@ -2,6 +2,7 @@
 
 	Song object: {
 		id: 0,			// The song ID in the queue. This is not necessarily the track position in the queue (unless shuffle is disabled).
+		oID: 0, 		// This is the above ID (used for unshuffling)
 		loop: false, 	// If `true` we loop this song
 
 		title: "Never Gonna Give You Up",		// Title of the song
@@ -67,6 +68,21 @@
 
 	}
 
+
+	
+	Queuer 2 API:
+		Types:
+			queueData: {
+				textChannel: Discord.TextChannel	| The text channel "controlling" the queue (if channel locked. Regardless, this is where queue status is sent)
+				voiceChanne: Discord.VoiceChannel	| The voice channel the queue plays in
+				song?: Queuer.Song 					| First song in the queue, optional
+			}	
+
+		CreateQueue(ID, /queueData/): Creates a new queue with ID #ID. queueData is an object that contains:
+			
+		AddSong(queueID, song[, /queueData/]): Adds a song to a queue with ID queueID, (if no queue is active, creates one using provided queueData)
+
+		GetQueueObject(queueID): Returns the Queue object of a queue with ID queueID.
 
 
 	Queuer:

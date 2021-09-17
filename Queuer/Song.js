@@ -17,7 +17,7 @@ class NoQueueError extends Error {
             Error.captureStackTrace(this, NoQueueError);
         }
 
-        this.nmae = "NoQueueError";
+        this.name = "NoQueueError";
         this.descriptor = "No queue set, failed to run queue action";
         this.action = action;
         this.date = new Date();
@@ -26,16 +26,28 @@ class NoQueueError extends Error {
 
 class Song {
     /**
-     * The song ID (auto filled by Queuer)
+     * The song ID (auto filled by Queuer). This is the position in the queue's song array
      * @type {number}
      */
     id;
+
+    /**
+     * Becomes the original `id` when shuffle is applied
+     * @type {number}
+     */
+    oID;
 
     /**
      * Title of the song
      * @type {string}
      */
     title;
+
+    /**
+     * Loop song?
+     * @type {boolean}
+     */
+    loop;
 
     /**
      * 
@@ -178,17 +190,19 @@ class Song {
     /**
      * Returns song as JSON object
      * 
-     * @return {JSON} JSONified song
+     * @return {object} Sterile Song object
      */
-    ToJSON() {
-        JSON.stringify({
+    toJSON() {
+        return {
             id: this.id,
+            oID: this.oID,
+            loop: this.loop,
             title: this.title,
             metaData: this.metaData,
             temporary: this.temporary,
             packageName: this.packageName,
             persistentData: this.persistentData,
-        })
+        }
     }
 
 

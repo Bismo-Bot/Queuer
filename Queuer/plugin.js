@@ -86,11 +86,10 @@ function mainHandler(message) {
 		playStreamFunction(message.guild.id, serverQueue.songs[serverQueue.currentSong], stream);
 	}
 
-
 	var vc = undefined;
-	if (message.member != undefined)
-		if (message.member.voice != undefined)
-			vc = message.member.voice.channel;
+	if (message.message.member != undefined)
+		if (message.message.member.voice != undefined)
+			vc = message.message.member.voice.channel;
 	
 	if (vc == undefined)
 		return message.reply("You must join a voice channel first.");
@@ -105,7 +104,7 @@ function mainHandler(message) {
 			Queues.delete(message.guild.id);
 		}
 
-		message.react('🖖');
+		message.message.react('🖖');
 		return;
 	}
 
@@ -114,7 +113,7 @@ function mainHandler(message) {
 		if (!serverQueue) {
 			// Create a queue
 			serverQueue = Plugin.createQueue(message.guild.id, { voiceChannel: message.member.voice.channel, textChannel: message.channel });
-			message.react('⭕');
+			message.message.react('⭕');
 		}
 	}
 	
@@ -128,9 +127,9 @@ function mainHandler(message) {
 			serverQueue.notify(true);
 
 			Queues.delete(message.guild.id);
-			return message.react("🖖");
+			return message.message.react("🖖");
 		} else {
-			return message.react("⁉️");
+			return message.message.react("⁉️");
 		}
 	}
 
@@ -198,7 +197,7 @@ function mainHandler(message) {
 
 		if (song != undefined) {
 			message.reply("_" + song.title + "_ (" + song.timeStamp + ") was uploaded by " + song.addedByUsername + ". ");
-			return message.react('👌');
+			return message.message.react('👌');
 		}
 
 
@@ -280,8 +279,8 @@ function mainHandler(message) {
 
 			serverQueue.shuffle = false;
 			serverQueue.notify();
-			message.react("🙅‍♂️")
-			return message.react("🔀");
+			message.message.react("🙅‍♂️")
+			return message.message.react("🔀");
 		} else {
 			for (let i = serverQueue.songs.length - 1; i > 0; i--) {
 				const j = Math.floor(Math.random() * (i + 1));
@@ -299,7 +298,7 @@ function mainHandler(message) {
 
 			serverQueue.shuffle = true;
 			serverQueue.notify();
-			return message.react("🔀");
+			return message.message.react("🔀");
 		}
 
 		// Shuffle
@@ -315,10 +314,10 @@ function mainHandler(message) {
 
 			serverQueue.notify();
 			if (looped)
-				message.react('🔂');
+				message.message.react('🔂');
 			else {
-				message.react('🙅‍♂️');
-				message.react('🔂');
+				message.message.react('🙅‍♂️');
+				message.message.react('🔂');
 			}
 
 		} else if (sub == "queue" || sub == "q") {
@@ -328,10 +327,10 @@ function mainHandler(message) {
 
 			serverQueue.notify();
 			if (looped)
-				message.react('🔁');
+				message.message.react('🔁');
 			else {
-				message.react('🙅‍♂️');
-				message.react('🔁');
+				message.message.react('🙅‍♂️');
+				message.message.react('🔁');
 			}
 
 		} else {
@@ -340,21 +339,21 @@ function mainHandler(message) {
 				// Loop song.
 				serverQueue.loop = false;
 				serverQueue.songs[serverQueue.currentSong].loop = true;
-				message.react('🔂');
+				message.message.react('🔂');
 
 			} else if (serverQueue.songs[serverQueue.currentSong].loop) {
 				// No loop
 				serverQueue.loop = false;
 				serverQueue.songs[serverQueue.currentSong].loop = false;
-				message.react('🙅‍♂️');
-				message.react('🔁');
+				message.message.react('🙅‍♂️');
+				message.message.react('🔁');
 
 			} else {
 				// Loop queue
 				serverQueue.loop = true;
 				serverQueue.songs[serverQueue.currentSong].loop = false;
 				serverQueue.notify();
-				message.react('🔁');
+				message.message.react('🔁');
 
 			}
 
@@ -390,7 +389,7 @@ function mainHandler(message) {
 						playStreamFunction(message.guild.id, serverQueue.songs[index], stream);
 					}
 					serverQueue.songs[index].play(playStreamFunc, serverQueue);
-					return message.react('👌');
+					return message.message.react('👌');
 				}
 			}
 		}
@@ -413,7 +412,7 @@ function mainHandler(message) {
 			if (o == undefined)
 				o = {};
 
-			o.react = message.react;
+			o.react = message.message.react;
 
 			Plugin.removeSong(serverQueue.queueID, index, o);
 		}
@@ -653,7 +652,7 @@ function saveQueue(queue, name, message, saveLocation) {
 
 	savedQueues[ID] = cleanQueue;
 
-	Bismo.writeConfig(savedQueues, undefined, "savedQueues");
+	Bismo.WriteConfig(savedQueues, undefined, "savedQueues");
 
 	return true;
 }
@@ -693,15 +692,16 @@ function deleteQueue(name, guildID, message) {
 	if (ID!=undefined) {
 		delete savedQueues[ID];
 		message.react('👌');
-		Bismo.writeConfig(savedQueues, undefined, "savedQueues");
+		Bismo.WriteConfig(savedQueues, undefined, "savedQueues");
 	} else
 		message.reply("No queue was found to delete.");
 }
 
 /**
- * @param {string} name Name of the saved queue.
- * @param {Discord.ID} guildID The ID of the guild the queue will be in
- * @param {Discord.message} message The message that includes the command to load a saved queue (used to find the author ID, voice and text channel)
+ * Loads a queue
+ * @param {string} name - Name of the saved queue.
+ * @param {Discord.ID} guildID - The ID of the guild the queue will be in
+ * @param {Discord.message} message - The message that includes the command to load a saved queue (used to find the author ID, voice and text channel)
  */
 function loadQueue(name, guildID, message) {
 	name = name.toLowerCase();
@@ -735,7 +735,7 @@ function loadQueue(name, guildID, message) {
 	for (var i = 0; i<savedQueue.songs.length; i++) {
 		if (savedQueue.songs[i] != undefined) {
 			if (pluginHandles[savedQueue.songs[i].packageName] == undefined)
-				pluginHandles[savedQueue.songs[i].packageName] = Bismo.getPlugin(savedQueue.songs[i].packageName, true);
+				pluginHandles[savedQueue.songs[i].packageName] = Bismo.GetPlugin(savedQueue.songs[i].packageName, true);
 
 			if (typeof pluginHandles[savedQueue.songs[i].packageName].setSong == "function") {
 				let s = pluginHandles[savedQueue.songs[i].packageName].setSong(savedQueue.songs[i]);
@@ -981,7 +981,7 @@ Plugin.createQueue = function(queueID, queueData) {
 				queue.playbackMessage = msg;
 
 				playbackMessages.push({ msgID: msg.id, channelID: msg.channel.id });
-				Bismo.writeConfig(playbackMessages, undefined, "playbackMessages");
+				Bismo.WriteConfig(playbackMessages, undefined, "playbackMessages");
 
 				if (msg.pinnable)
 					msg.pin({ reason: 'Displaying current playback information.' });
@@ -1192,8 +1192,8 @@ function main(Requests) {
 	Bismo = Requests.Bismo // The Bismo API
 
 
-	savedQueues = Bismo.readConfig("savedQueues");
-	playbackMessages = Bismo.readConfig("playbackMessages");
+	savedQueues = Bismo.ReadConfig("savedQueues");
+	playbackMessages = Bismo.ReadConfig("playbackMessages");
 
 	Bismo.events.discord.on('ready', async Client => {
 		if (playbackMessages!=undefined) {
@@ -1210,7 +1210,7 @@ function main(Requests) {
 			}
 		}
 		playbackMessages = [];
-		Bismo.writeConfig(playbackMessages, undefined, "playbackMessages");
+		Bismo.WriteConfig(playbackMessages, undefined, "playbackMessages");
 	});
 
 
