@@ -1,13 +1,20 @@
-// Song 'class'
+// Queue 'class'
 
 const Discord = require("discord.js");
 const Song = require('./song');//(Bismo);
 const EventEmitter = require('events');
+const DiscordVoice = require("@discordjs/voice");
+
+const crypto = require("node:crypto")
+
+const BismoAudioPlayer = require('./../../Support/VoiceManager.js').BismoAudioPlayer;
+const BismoVoiceChannel = require('./../../Support/VoiceManager.js').BismoVoiceChannel;
+
 
 class Queue {
 
     /**
-     * The queue ID (typically the guildID + channelID)
+     * The queue ID (typically just a number that increments up with every new queue)
      * @type {number}
      */
     id;
@@ -16,7 +23,13 @@ class Queue {
      * The guild we're playing in (or if personal, authorID)
      * @type {string}
      */
-    guildID;
+    guildId;
+
+    /**
+     * The author (creator) of this queue
+     * @type {string}
+     */
+    authorID;
 
     /**
      * @typedef {Discord.VoiceConnection} VoiceConnection
@@ -31,7 +44,10 @@ class Queue {
      * @typedef {Discord.VoiceChannel} VoiceChannel
      */
     /**
-     * @typedef {Discord.StreamDispatcher} StreamDispatcher
+     * @typedef {DiscordVoice.AudioPlayer} AudioPlayer
+     */
+    /**
+     * @typedef {DiscordVoice.AudioResource} AudioResource
      */
 
     /**
@@ -41,10 +57,24 @@ class Queue {
     voiceConnection;
 
     /**
-     * 
-     * @type {StreamDispatcher}
+     * VoiceConnection's audioPlayer
+     * @type {AudioPlayer}
      */
-    voiceDispatcher;
+    audioPlayer;
+
+
+    /**
+     * Bismo voice channel
+     * @type {import('./../../Support/VoiceManager.js').BismoVoiceChannel}
+     */
+    BismoVoiceChannel;
+
+    /**
+     * Bismo audio player
+     * @type {import('./../../Support/VoiceManager.js').BismoAudioPlayer}
+     */
+    BismoAudioPlayer;
+
 
     /**
      * The ID for the playback message (used to update playback statuses)
@@ -62,13 +92,13 @@ class Queue {
      * Array of song objects
      * @type {Song[]}
      */
-    songs;
+    songs = [];
 
     /**
      * Playback volume
      * @type {number}
      */
-    volume;
+    volume = 50;
 
     /**
      * Whether or not the queue is currently paused
@@ -126,9 +156,43 @@ class Queue {
     events = new EventEmitter();
 
 
+    /**
+     * Additional constructor data
+     * @typedef {object} ConstructorData
+     * @property {[number|string]} queueID ID to set the queue to
+     * @property {TextChannel} textChannel Text channel to link the queue to
+     * @property {[string]} authorID UserID of the creator of this queue
+     */
 
-    constructor(data) {
+    /**
+     * Creates a new queue
+     * @param {string} guildID Guild that is hosting this queue
+     * @param {VoiceChannel} voiceChannel Voice channel this queue is starting in
+     * @param {ConstructorData} data Additional data to build the queue with
+     */
+    constructor(guildId, voiceChannel, data) {
+        this.guildId = guildId;
+        this.voiceChannel = voiceChannel;
 
+        if (data != undefined) {
+            if (data.textChannel != undefined)
+                if (data.textChannel.type == "GUILD_TEXT")
+                    this.textChannel = this.textChannel;
+
+            if (data.queueID != undefined)
+                if (typeof data.queueID !== "number" && typeof data.queueID !== "string")
+                    throw new TypeError("data.queueID expected number|string got " + (typeof data.queueID).toString());
+                else
+                    this.id = data.queueID;
+            else
+                this.id = crypto.createHash("sha1").update(voiceChannel.guildId + voiceChannel.id + (Math.random().toString(36).substring(2)));
+
+            if (data.authorID != undefined)
+                if (typeof data.authorID === "number")
+                    this.authorID = data.authorID
+        }
+
+        this.BismoVoiceChannel = process.Bismo.VoiceManager.GetBismoVoiceChannel(voiceChannel.id, guildId);
     }
 
     /**
@@ -162,24 +226,38 @@ class Queue {
      * Joins the voiceChannel and assigns the voiceConnection
      * @return {boolean} Whether or not the voiceConnection was created
      */
-    JoinVoiceChannel = async function() {
-        if (!this.voiceChannel) {
-            throw new NoVoiceChannel("JoinVoiceChannel");
-        }
-        if (this.voiceChannel.type != "voice" && this.voiceChannel.type != "dm")
-            throw new NoVoiceChannel("JoinVoiceChannel");
-        if (typeof this.voiceChannel.permissionsFor != "function")
-            throw new NoVoiceChannel("JoinVoiceChannel");
-        let permissions = this.voiceChannel.permissionsFor(Client.user)
-        if (!permissions.has("CONNECT"))
-            throw new NoVoiceChannelPermissions("connect");
-        if (!permissions.has("SPEAK"))
-            throw new NoVoiceChannelPermissions("speak");
+    JoinVoiceChannel = function() {
+        this.BismoVoiceChannel.Connect();
 
-        // Okay there should be a joinable voice channel were we can speak in.
-        connection = await this.voiceChannel.join();
-        this.voiceConnection = connection;
-        if (playbackMessageID == undefined) {
+        this.BismoAudioPlayer = process.Bismo.VoiceManager.CreateBismoAudioPlayer({
+            pluginName: "Queuer",
+            pluginPackage: "com.watsuprico.queuer",
+            name: "Unknown",
+        });
+        this.BismoAudioPlayer.AudioPlayer = new DiscordVoice.createAudioPlayer({
+            behaviors: {
+                noSubscriber: DiscordVoice.NoSubscriberBehavior.Pause, // When no one is listening, we'll pause.
+            }
+        });
+        this.BismoAudioPlayer.AudioPlayer.on(DiscordVoice.AudioPlayerStatus.Idle, async () => {
+            let song = this.GetSong(this.currentSong);
+            this.BismoVoiceChannel.GetVoiceConnection().setSpeaking(0);
+            this.events.emit('finish', song);
+            delete song.audioResource;
+            await new Promise(r => setTimeout(r, 500)); // Wait a second or two before starting next song
+            process.Bismo.log("finish: " + song.id)
+            this.Next();
+        });
+        this.BismoAudioPlayer.AudioPlayer.on('error', error => {
+            console.error(error);
+            console.error(`[Queuer] Error playing ${error.resource.metadata.title}: ${error.message}`);
+            //player.stop();
+            this.Next(); // play next song
+        });
+
+        this.BismoVoiceChannel.Subscribe(this.BismoAudioPlayer);
+
+        if (this.playbackMessageID == undefined) {
             this.CreatePlaybackMessage();
             return true;
         }
@@ -204,23 +282,45 @@ class Queue {
      * @throws {NoSuchSong}
      */
     Play(song) {
+        if (this.BismoVoiceChannel == undefined) {
+            this.BismoVoiceChannel = process.Bismo.VoiceManager.GetBismoVoiceChannel(this.voiceChannel.id, this.voiceChannel.guildId);
+        }
+
         // First check if we are in a VC and have a voiceConnection
-        if (this.voiceConnection == undefined) {
+        if (this.BismoVoiceChannel.GetVoiceConnection() == undefined) {
             // try and connect to the vc?
             if (this.JoinVoiceChannel() != true) {
                 throw new NoVoiceConnection("Play", "No voiceChannel available.");
             }
-        } else if (this.voiceConnection.status == 4) {
-            // Disconnected.
+        } else if (this.BismoVoiceChannel.GetVoiceConnection().status == DiscordVoice.VoiceConnectionStatus.Disconnected || this.BismoVoiceChannel.GetVoiceConnection().status == DiscordVoice.VoiceConnectionStatus.Destroyed) {
+            // Disconnected, reconnect
+            // This solves the stopped issue
             if (this.JoinVoiceChannel() != true) {
                 throw new NoVoiceConnection("Play", "No voiceChannel available.");
             }
         }
 
+        // At some point add Bismo.Audio.RequestFocus() or Bismo.Audio.GetFocus()
+        if (this.BismoAudioPlayer?.AudioPlayer == undefined) {
+            // The audioPlayer somehow just kinda died, recreate it
+            if (this.JoinVoiceChannel() != true) {
+                throw new NoVoiceConnection("Play", "No audioPlayer available.");
+            }
+        }
+
+        if (this.paused && this.currentSong != undefined) {
+            this.BismoAudioPlayer.AudioPlayer.play();
+            this.BismoVoiceChannel.GetVoiceConnection().setSpeaking(1);
+            this.paused = false;
+            this.UpdatePlaybackMessage();
+            this.events.emit("play", this.currentSong);
+            return true;
+        }
+
         // Okay we're in a VC, play
         if (song == undefined) {
-            // Just a simple PLAY
-            song = GetSong(this.currentSong);
+            // Just a simple PLAY, so find the current song
+            song = this.GetSong(this.currentSong);
         }
 
         if (song == undefined) 
@@ -232,15 +332,26 @@ class Queue {
 
         this.currentSong = song.id; // Update queue play head
 
-        this.dispatcher = voiceConnection.play(stream).on('finish', ()=> {
-            this.voiceConnection.setSpeaking(0);
-            events.emit('finish');
-        });
+        if (song.audioResource == undefined) {
+            song.audioResource = DiscordVoice.createAudioResource(stream, {
+                inputType: DiscordVoice.StreamType.WebmOpus,
+                inlineVolume: true,
+                metadata: {
+                    title: song.title,
+                    queueID: this.id,
+                    songID: song.id,
+                },
+            });
+            //song.audioResource.on('error', error => {
+            //    // Do something. Maybe goto the next song?
+            //});
+        }
+            
+        this.BismoAudioPlayer.AudioPlayer.play(song.audioResource);
 
+        song.audioResource.volume.setVolume(this.volume/100);
 
-        this.dispatcher.setVolume(this.volume/100);
-
-        console.log("Playing queue " + this.id + ". Song ID " + this.currentSong);
+        console.log("Playing queue " + this.id + ". Song ID " + this.currentSong + " (" + song.title + ")");
         this.UpdatePlaybackMessage();
 
     }
@@ -262,19 +373,21 @@ class Queue {
         }
 
         if (song == this.currentSong) {
-            this.dispatcher.pause();
-            this.voiceConnection.setSpeaking(0);
+            this.BismoAudioPlayer.AudioPlayer.pause();
+            this.BismoVoiceChannel.GetVoiceConnection().setSpeaking(0);
             this.paused = true;
             this.UpdatePlaybackMessage();
+            this.events.emit("pause", song);
         }
     }
 
     /**
      * Skips the currently playing song in the queue. If paused, begins playback.
      * (If song is provided then the song is only skipped if playing)
-     * @param {Song | number} [song] - The song to begin playing
+     * @param {Song | number} [song] - We play whatever song comes after this one.
+     * @param {NextTrackReason} [reason] Reason for calling Next() _(this is largely so we can distinguish from user calls and end of song calls)_
      */
-    Skip(song) {
+    Next(song, reason) {
         if (song == undefined) {
             song = this.currentSong;
         } else {
@@ -285,25 +398,31 @@ class Queue {
             }
         }
 
-        if (song == this.currentSong) {
-            events.emit('next');
-            if (this.currentSong >= this.songs.length) {
+        this.events.emit('next');
+        if (this.currentSong >= this.songs.length-1) {
+            if (reason == NextTrackReason.EndOfSong) {
                 // End of Queue.
                 if (this.loop) {
                     // Loop around to the beginning
                     this.Play(this.songs[0]);
-                    events.emit('loop');
+                    this.events.emit('loop', this);
                 } else {
-                    events.emit('finish');
+                    this.events.emit('finish-queue', this);
                     this.paused = true;
                     this.currentSong = 0;
-                    this.voiceConnection.setSpeaking(0);
+                    this.BismoVoiceChannel.GetVoiceConnection().setSpeaking(0);
+                    process.Bismo.log("Finished queue " + this.id);
                 }
-            } else {
-                // Just go to the next song bro
-                this.Play(this.songs[this.currentSong+1]);
             }
+            
+        } else {
+            // Just go to the next song bro
+            this.Play(this.songs[this.currentSong+1]);
         }
+    }
+
+    Previous(song) {
+        
     }
 
     /**
@@ -315,7 +434,7 @@ class Queue {
     /**
      * Adds a song to the queue
      * @param {Song} song - The song to be added to the queue
-     * @param {AddOptions} options - Additional options for adding the song
+     * @param {[AddOptions]} options - Additional options for adding the song
      * @throws {NoSuchSong}
      */
     Add(song, options) {
@@ -331,6 +450,8 @@ class Queue {
                     }
                 }
 
+                song.id = this.songs.length;
+                song.queue = this;
                 this.songs.push(song);
 
                 if (options != undefined) {
@@ -348,9 +469,15 @@ class Queue {
             } else {
                 throw new NoSuchSong(0);
             }
-
         }
 
+        if (this.songs.length == 1) {
+            this.currentSong = 0;
+            this.Play();
+        } else if (this.paused || this.BismoAudioPlayer.AudioPlayer.state.status == "idle") {
+            this.Play();
+        }
+        return true;
     }
 
     /**
@@ -439,20 +566,48 @@ class Queue {
     }
 
     /**
-     * Stops the queue. Pauses all playback and executes Destroy()
+     * 
+     * @param {number} toTime - Seek {@link song} to this time (_in ms_) or seek the current song to this time in ms. 
+     * @param {Song} [song] - The song 
+     */
+    SeekSong(toTime, song) {
+        if (typeof toTime !== "number")
+            throw new TypeError("toTime expected number got " + (typeof toTime).toString());
+
+        if (song == undefined) {
+            song = this.currentSong;
+        } else {
+            if (typeof song == "number") {
+                song = song;
+            } else {
+                song = song.id;
+            }
+        }
+
+    }
+
+    /**
+     * Stops the queue. Pauses all playback and executes leaves the voice chat. Queue still available.
      * 
      */
     Stop() {
         this.Pause();
-        this.Destroy();
+        this.BismoVoiceChannel.GetVoiceConnection().disconnect();
     }
 
     /**
      * Disconnects the bot from the voice chat, cleans up the playback message, and destroys the queue.
-     * @param {boolean} force - Force voice connection disconnect (will disconnect the bot from its current VC!)
      */
-    Destroy(force) {
-
+    Destroy() {
+        if (this.playbackMessage != undefined)
+            this.playbackMessage.delete();
+        
+        this.VoiceChannel.Destroy();
+        this.paused = true;
+        this.UpdatePlaybackMessage();
+        delete this.songs;
+        this.events.emit("destroyed", this.id);
+        delete this.voiceChannel;
     }
 
     /**
@@ -460,12 +615,13 @@ class Queue {
      * 
      */
     UpdatePlaybackMessage() {
-        if (this.paused) {
-            this.playbackMessage.edit("[PAUSED] " + this.songs[this.currentSong].title);
-        } else {
-            this.playbackMessage.edit("Playing " + this.songs[this.currentSong].title);
+        if (this.playbackMessage != undefined) {
+            if (this.paused) {
+                this.playbackMessage.edit("[PAUSED] " + this.songs[this.currentSong].title);
+            } else {
+                this.playbackMessage.edit("Playing " + this.songs[this.currentSong].title);
+            }
         }
-
     }
 
 
@@ -490,12 +646,17 @@ class Queue {
 
 }
 
+const NextTrackReason = {
+    UserRequest: "UserRequest",
+    EndOfSong: "EndOfSong"
+}
+
 class NoVoiceConnection extends Error {
     constructor(action = "unknown", ...params) {
         super(...params);
 
         if (Error.captureStackTrace) {
-            Error.captureStackTrace(this, NoQueueError);
+            Error.captureStackTrace(this, NoVoiceConnection);
         }
 
         this.name = "NoVoiceConnection";
@@ -507,7 +668,7 @@ class NoVoiceChannel extends Error {
         super(...params);
 
         if (Error.captureStackTrace) {
-            Error.captureStackTrace(this, NoQueueError);
+            Error.captureStackTrace(this, NoVoiceChannel);
         }
 
         this.name = "NoVoiceChannel";
@@ -519,7 +680,7 @@ class NoVoiceChannelPermissions extends Error {
         super(...params);
 
         if (Error.captureStackTrace) {
-            Error.captureStackTrace(this, NoQueueError);
+            Error.captureStackTrace(this, NoVoiceChannelPermissions);
         }
 
         this.name = "NoVoiceChannelPermissions";
@@ -531,7 +692,7 @@ class NoSuchSong extends Error {
         super(...params);
 
         if (Error.captureStackTrace) {
-            Error.captureStackTrace(this, NoQueueError);
+            Error.captureStackTrace(this, NoSuchSong);
         }
 
         this.name = "NoSuchSong";
@@ -540,3 +701,7 @@ class NoSuchSong extends Error {
 }
 
 module.exports = Queue;
+// module.exports = function(bismo) {
+//     Bismo = bismo;
+//     return Queue;
+// }

@@ -1195,48 +1195,65 @@ function main(Requests) {
 	savedQueues = Bismo.ReadConfig("savedQueues");
 	playbackMessages = Bismo.ReadConfig("playbackMessages");
 
-	Bismo.events.discord.on('ready', async Client => {
-		if (playbackMessages!=undefined) {
-			for (var i = 0; i<playbackMessages.length; i++) {
-				try {
-					if (playbackMessages[i]!=undefined) {
-						var chan = await Client.channels.fetch(playbackMessages[i].channelID)
-						if (chan!=undefined) {
-							var msg = await chan.messages.fetch(playbackMessages[i].msgID)//.then(msg=>{
-							msg.delete();
-						}
-					}
-				} catch (a) {} // if the message doesn't exist...				
-			}
-		}
-		playbackMessages = [];
-		Bismo.WriteConfig(playbackMessages, undefined, "playbackMessages");
+	// Bismo.events.Discord.on('ready', async Client => {
+	// 	if (playbackMessages!=undefined) {
+	// 		for (var i = 0; i<playbackMessages.length; i++) {
+	// 			try {
+	// 				if (playbackMessages[i]!=undefined) {
+	// 					var chan = await Client.channels.fetch(playbackMessages[i].channelID)
+	// 					if (chan!=undefined) {
+	// 						var msg = await chan.messages.fetch(playbackMessages[i].msgID)//.then(msg=>{
+	// 						msg.delete();
+	// 					}
+	// 				}
+	// 			} catch (a) {} // if the message doesn't exist...				
+	// 		}
+	// 	}
+	// 	playbackMessages = [];
+	// 	Bismo.WriteConfig(playbackMessages, undefined, "playbackMessages");
+	// });
+
+
+	// Bismo.RegisterCommand("que", mainHandler, "Manage the song queue.", "Usage:\n"
+	// 	+ "`!que [option]`\n"
+	// 	+ "\n"
+	// 	+ "Options:\n"
+	// 	+ "	-	`clear`: Clears the queue\n"
+	// 	+ "	-	`view`: View the queue\n"
+	// 	+ "	-	`skip`: Skip the current song\n"
+	// 	+ "	-	`vol`: Set the output volume % (0-200, 100 is normal)"
+	// 	+ "	-	`loop [song | queue]`:	Toggles repeat\n"
+	// 	+ "	-	`remove <index | title>`: Removes the song at <index> or with <title>\n"
+	// );
+
+	// Bismo.RegisterCommand("q", mainHandler, "Manage the song queue.", "Usage:\n"
+	// 	+ "`!que [option]`\n"
+	// 	+ "\n"
+	// 	+ "Options:\n"
+	// 	+ "	-	`clear`: Clears the queue\n"
+	// 	+ "	-	`view`: View the queue\n"
+	// 	+ "	-	`skip`: Skip the current song\n"
+	// 	+ "	-	`vol`: Set the output volume % (0-200, 100 is normal)"
+	// 	+ "	-	`loop [song | queue]`:	Toggles repeat\n"
+	// 	+ "	-	`remove <index | title>`: Removes the song at <index> or with <title>\n"
+	// );
+
+	Bismo.RegisterCommand("q", mainHandler, {
+		description: "Manage the voice channel audio queue.",
+		helpMessage: "Usage:\n"
+		+ "`!que [option]`\n"
+		+ "\n"
+		+ "Options:\n"
+		+ "	-	`clear`: Clears the queue\n"
+		+ "	-	`view`: View the queue\n"
+		+ "	-	`skip`: Skip the current song\n"
+		+ "	-	`vol`: Set the output volume % (0-200, 100 is normal)"
+		+ "	-	`loop [song | queue]`:	Toggles repeat\n"
+		+ "	-	`remove <index | title>`: Removes the song at <index> or with <title>\n",
+		requireParams: false,
+		guildRequried: true,
+		slashCommand: false,
 	});
-
-
-	Bismo.registerCommand("que", mainHandler, "Manage the song queue.", "Usage:\n"
-		+ "`!que [option]`\n"
-		+ "\n"
-		+ "Options:\n"
-		+ "	-	`clear`: Clears the queue\n"
-		+ "	-	`view`: View the queue\n"
-		+ "	-	`skip`: Skip the current song\n"
-		+ "	-	`vol`: Set the output volume % (0-200, 100 is normal)"
-		+ "	-	`loop [song | queue]`:	Toggles repeat\n"
-		+ "	-	`remove <index | title>`: Removes the song at <index> or with <title>\n"
-	);
-
-	Bismo.registerCommand("q", mainHandler, "Manage the song queue.", "Usage:\n"
-		+ "`!que [option]`\n"
-		+ "\n"
-		+ "Options:\n"
-		+ "	-	`clear`: Clears the queue\n"
-		+ "	-	`view`: View the queue\n"
-		+ "	-	`skip`: Skip the current song\n"
-		+ "	-	`vol`: Set the output volume % (0-200, 100 is normal)"
-		+ "	-	`loop [song | queue]`:	Toggles repeat\n"
-		+ "	-	`remove <index | title>`: Removes the song at <index> or with <title>\n"
-	);
 
 
 }

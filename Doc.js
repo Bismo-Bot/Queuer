@@ -28,6 +28,7 @@
 	}
 
 	Queue object: {
+		#id: The queue ID
 		#guildID: The guild we're playing in
 		#voiceConnection: The VoiceConnection object
 		#playbackMessageID: The ID of the current playback message
@@ -38,16 +39,17 @@
 		#textChannel: The text channel we're subscribed to
 		#voiceChannel: The voice channel we're currently playing in
 		#id: The ID of the queue (typically the guildID + a random string)
+		#events: EventEmitter of thrown Queue events.
+			finish, finish-queue, play, pause, next, loop (queue looped), repeat (song looped), previous, removed, destroyed
 
 		
 		#UpdatePlaybackMessage(): Updates the playback message with the current playback status
 
 
-		Play(): 			Starts playing the queue (or resume)
-		PlaySong(song): 	Starts playing (streaming) a song
+		Play(song):			Starts playing the queue (or resume) or a song
 
 		Pause([song | ID]): Pauses the queue (if song | ID is provided, the queue is only paused if that song/ID is playing)
-		Skip([song | ID]): 	Skips the current song (if song | ID is provided, the song is skipped on if that song/ID is playing)
+		Next([song | ID]): 	Skips the current song (if song | ID is provided, the song is skipped on if that song/ID is playing)
 
 		Add(song, options):	Adds `song` to the current queue.
 			Options:
@@ -55,8 +57,13 @@
 				nextInQueue: (boolean) add the song to the queue but places it to play next
 		Remove(song): 		Removes `song` from the playback queue (skips if playing)
 
-		Stop(): 			Stops playing a queue (destroys the queue)
-		Destroy(): 			Destroys the queue
+		Move(song, toSong, moveOptions): Moves a song to an another location. song is moved to toSong (if moveOptions = 0: song goes after toSong, 1: before toSong, 2: switch positions)
+
+		Repeat([enable, track]): Enable turns queue looping on/off, track turns song repeat on/off. If none specified, toggles OFF -> LOOP -> REPEAT
+		Shuffle([enable]): Enable/disable shuffle (toggle if not specified)
+
+		Stop(): 			Stops playing a queue and disconnects from voice chat (running !q play restarts playback)
+		Destroy(): 			Destroys the queue (leaves VC, destroys AudioResource, AudioPlayer, and VoiceConnection. Queue non-recoverable.) Caller must de-reference Queue object.
 
 
 		Save(name, authorID[, options]): Save a queue to disk. Wrapper for Queuer.SaveQueue(this, **)
@@ -78,11 +85,24 @@
 				song?: Queuer.Song 					| First song in the queue, optional
 			}	
 
-		CreateQueue(ID, /queueData/): Creates a new queue with ID #ID. queueData is an object that contains:
+		AdditionalData: {
+			guildID: Guild the queue is active in
+			voiceChannel: Voice channel the queue is currently in (will be assigned to or is active on)
+			voiceChannelID: Try to use the above
+			textChannel: Text channel object the queue is bound to
+			textChannelID: Try to use above
+			userID: User ID (used to assign the creator of a queue or confirm a user is in a queue)
+			mustIncludeUser: GetQueue will only return the queue if the userID is in the queue 
+		}
+
+		GetQueue(queueID[, additionalData]): Returns the Queue object of a queue with ID queueID.
+			Find the queue using the queueID, or additional data (VC ID->TC ID->Guild ID). 
+
+		CreateQueue(queueData): Creates a new queue with ID #ID. queueData is an object that contains:
 			
 		AddSong(queueID, song[, /queueData/]): Adds a song to a queue with ID queueID, (if no queue is active, creates one using provided queueData)
 
-		GetQueueObject(queueID): Returns the Queue object of a queue with ID queueID.
+
 
 
 	Queuer:
@@ -224,6 +244,27 @@
 		}
 
 
+			-v, -view: Current queue info
+			-i, -info, -song [song ID / title]: Currently playing (or provided ID) song info (likely needs to include a URL)
+			-p, -playpause: Toggle between play/pause
+			-play: Continue playing the queue
+			-pause: Pause queue playback
+			
+			-n, --next, -s, --skip [song ID / title]: Next song (or skip to provided song ID / title)
+			-prev, --previous: Previous song
+			-vs, --voteskip <song ID / title>: Allow listeners to vote skip a song or current song (must have x% of people vote skip before song is skipped)
+			-m, --move <song ID / title> <new position>: Move a song to a certain position in the queue (shifts everything over)
+			-r, --remove [song ID / title]: Removes a song from the queue (if no ID/title provided, remove the current song and skip)
+						 [start song ID / title] [end song ID / title]: Removes a range of song IDs
+
+			-e, --end, -d, --destroy: Destroy the queue (stop and leave)
+			-stop: Pause playback, reset queue to the beginning
+			-clear: Clear queue (remove all songs)
+			
+			-volume: Change playback volume
+			-l, -loop, -repeat [track/song | queue | off]: Toggle between no loop/repeat -> repeat song -> loop queue (or set loop mode to 'off', 'repeat' or 'loop')
+			-shuffle: Shuffle queue (set queue to song 0, randomize order)
+
 		Groovy commands:
 			Need to add:
 				playlists
@@ -246,7 +287,7 @@
 			X-disconnect
 			X-shuffle
 			X-song [song]: Info about song
-			-24/7
+			X-24/7 (by default)
 			X-volume [vol]
 			-seek
 			-fastfoward: Seek, but relative
