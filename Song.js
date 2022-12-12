@@ -5,6 +5,7 @@
 /**
  * @typedef {import('./Queue.js')} Queue
  */
+const DiscordVoice = require('@discordjs/voice');
 
 /**
  * Thrown when we attempt to modify a queue but have no queue parent set for the song
@@ -28,16 +29,10 @@ class NoQueueError extends Error {
 
 class Song {
     /**
-     * The song ID (auto filled by Queuer). This is the position in the queue's song array
-     * @type {number}
+     * The song ID (UUID).
+     * @type {string}
      */
     Id;
-
-    /**
-     * Becomes the original `id` when shuffle is applied
-     * @type {number}
-     */
-    OriginalId;
 
     /**
      * Title of the song
@@ -100,14 +95,14 @@ class Song {
 
     /**
      * 
-     * @type {}
+     * @type {DiscordVoice.AudioResource}
      */
     AudioResource;
 
     /**
      * Creates a new Song object
      * 
-     * @param {string} title - The title of the song. Can also be the stinified version of a song object. _If you're doing that, everything else **must** be undefined_
+     * @param {string} title - The title of the song. Can also be the stringifying version of a song object. _If you're doing that, everything else **must** be undefined_
      * @param {Metadata} metadata - Meta data of the song
      * @param {PluginData} pluginData - Data that is to find the author plugin of this song, (so we can get the StreamData and audio info)
      * @param {Queue} [queue = undefined] - The queue we're apart of
@@ -123,8 +118,8 @@ class Song {
                 this.FromJson(title);
 
         } else {
-            if (typeof queue === "object")
-                this.queue = queue;
+            if (typeof Queue === "object")
+                this.Queue = Queue;
 
             if (typeof title !== "string")
                 throw new TypeError("title expected string got " + (typeof title).toString());
@@ -142,6 +137,7 @@ class Song {
             this.Metadata = metadata;
             this.Temporary = isTemporary;
             this.PluginData = pluginData;
+            this.Id = crypto.randomUUID();
         }
     }
 
@@ -176,13 +172,13 @@ class Song {
     /**
      * Plays the song
      * 
-     * Calls queue.PlaySong(this)
-     * The method queue.PlaySong() grabs the stream data from this.GetStreamData()
+     * Calls Queue.Play(this)
+     * The method Queue.Play() grabs the stream data from this.GetStreamData()
      * 
      */
     Play() {
-        if (queue != undefined)
-            this.queue.Play(this);
+        if (Queue != undefined)
+            this.Queue.Play(this);
         else
             throw new NoQueueError('Play');
     }
@@ -191,8 +187,8 @@ class Song {
      * Pause the song (if playing)
      */
     Pause() {
-        if (queue != undefined)
-            this.queue.Pause(this);
+        if (Queue != undefined)
+            this.Queue.Pause(this);
         else
             throw new NoQueueError('Pause');
     }
@@ -201,8 +197,8 @@ class Song {
      * Skip the song (if playing)
      */
     Skip() {
-        if (queue != undefined)
-            this.queue.SkipSong(this);
+        if (Queue != undefined)
+            this.Queue.Next(this);
         else
             throw new NoQueueError('Skip');
     }
@@ -211,25 +207,43 @@ class Song {
      * Mark the song as repeat
      */
     Repeat(bool) {
-        if (bool == true) // hurr durr just do if (bool)  . No. JS is stupid, and so are you.
-            this.Repeat = true;
-        else if (bool == false)
-            this.Repeat = false;
-        else
-            this.Repeat = !this.Repeat;
+        if (this.IsPlaying())
+            this.Queue.Repeat = 1;
 
         return this.Rpeat
     }
 
     /**
+     * Remove this song from the queue 
+     */
+    Remove() {
+        if (this.Queue != undefined)
+            this.Queue.Remove(this);
+    }
+
+
+    /**
      * Seek song to position
      * @param {number} time - Time to skip to in seconds
      */
-    Seek(time) {
-        if (queue != undefined && typeof time == "number")
-            this.queue.SeekSong(this, time);
-        else
-            throw new NoQueueError('Seek');
+    // Seek(time) {
+    //     if (this.IsPlaying() && typeof time == "number")
+    //         // uhh
+    //     else
+    //         throw new NoQueueError('Seek');
+    // }
+
+    /**
+     * If this Song is currently playing in the queue
+     * @return {boolean} Song is playing or not
+     */
+    IsPlaying() {
+        if (this.Queue != undefined) {
+            if (this.Queue.CurrentSong != undefined)
+                return this.Queue.CurrentSong.Id == this.Id;
+        }
+
+        return false;
     }
 
     /**
@@ -240,10 +254,9 @@ class Song {
     ToJson() {
         return {
             Title: this.Title,
-            Id: this.OriginalId,
+            Id: this.Id,
             Repeat: this.Repeat,
             Temporary: this.Temporary,
-            OriginalId: this.OriginalId,
             PluginData: this.PluginData,
         }
     }
@@ -265,7 +278,7 @@ class Song {
         if (typeof data !== "object")
             throw new TypeError("data expected object got " + (typeof data).toString());
 
-        if (typeof data.Id !== "string"|| typeof data.Id !== "number")
+        if (typeof data.Id !== "string" || typeof data.Id !== "number")
             throw new TypeError("data.Id expected string or number, got " + (typeof data.Id).toString());
         data.OriginalId = data.Id;
 

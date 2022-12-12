@@ -33,38 +33,71 @@ Find the queue using the queueID, or additional data (VC ID->TC ID->Guild ID).
 
 
 ## Queue Object
+Songs are kept inside a plain array, `#Songs`. This array is Last-In First-Out (LIFO), that is the song at index 0 is played before the song at index 2. This array does NOT get modified unless to add or remove a song.\
+The order the songs are played in is determined by the `#SongsOrder` array, which is an array of numbers that represents the index of the song in the `#Songs` array.\
+The index of the first song to be played is stored at `#SongsOrder[0]`, we then use that number to grab the song we want to play first: `#Songs[#SongsOrder[0]]`.
+The next song is grabbed via `#Songs[#SongsOrder[1]]`.\
+`#SongsOrder[0]` -> first song in the queue.
+`#SongsOrder[1]` -> second song in the queue.
+`#SongsOrder[2]` -> third song in the queue.
+
+Only the values of the `#SongsOrder` change to "reorder" the queue. If the array is empty or undefined, we move through `#Songs` from 0->#Songs.length\
+We know where we're at using the `#HeadIndex` property which is the current index we use with `#SongsOrder`.
+
+
 
 ### Properties
-`id`: The queue ID
-`guildID`: The guild we're playing in
-`authorID`: Creator of the queue (has full queue permissions)
-`voiceConnection`: The VoiceConnection object
-`audioPlayer`: Audio play for the voiceConnection
-`playbackMessageID`: The ID of the current playback message
-`playbackMessage`: Message object for the playback message
-`songs`: Array of song objects
-`volume`: Playback volume
-`paused`: Whether the queue is currently being played
-`currentSong`: Currently playing song (the index in the array)
-`shuffle`: Shuffle status (true/false)
-`repeat`: Song repeat (true/false)
-`loop`: Queue loop (true/false) \[default: true\]
-`textChannel`: The text channel we're subscribed to
-`voiceChannel`: The voice channel we're currently playing in
-`events`: EventEmitter of thrown Queue events.
+`#Id`: The queue ID (UUID)
+`Id`: Read-only, returns private property `#Id`
+`GuildId`: Read-only, the guild the BismoVoiceChannel.ChannelObject is inside (guild we're playing in).
+`AuthorId`: Creator of the queue (has full queue permissions)
+
+
+`#BismoVoiceChannel`: VoiceManager `BismoVoiceChannel` for the VoiceChannel we're in. Handles things such as VoiceChannel changes, disconnects, etc.
+`BismoVoiceChannel`: Read-only, returns private property `#BismoVoiceChannel`.
+`VoiceChannel`: Read-only, returns `#BismoVoiceChannel.ChannelObject` (a `Discord.VoiceChannel`)
+`VoiceConnection`: Read-only, returns `#BismoVoiceChannel.GetVoiceConnection()`
+
+`#BismoAudioPlayer`: BismoAudioPlayer for the VoiceChannel
+`BismoAudioPlayer`: Read-only, returns private property `#BismoVoiceChannel`
+
+
+`#PlaybackMessage`: Message object for the playback message (which is inside the VoiceChannel text channel)
+`PlaybackMessage`: Read-only, returns private property `#PlaybackMessage`
+`ReusePlaybackMessage`: Boolean, if true we edit the #PlaybackMessage on queue status change. If false, or the PlaybackMessage is not editable, we delete the previous playback message and send a new one on queue status change. Defaults to true.
+
+`#SongsOrder`: The playback order of songs inside `#Songs` (`#Songs[#SongsOrder[songNumber]]`)
+`#Songs`: Array of song objects (the queue)
+`Songs`: Returns the songs in the order they appear in `#SongsOrder`. If set, removes all songs then adds the provided songs in and plays and sets the `#HeadIndex` to the beginning
+`#HeadIndex`: Current index of the song being played (index related to `#SongsOrder` .. `(#Songs[#SongsOrder[#HeadIndex]])`)
+`HeadIndex`: Current song number playing related to the queue (song X in the queue).
+
+
+
+`#Paused`: Whether the queue is currently being played
+`Paused`: Pauses the queue if set to true (via `Pause()`) or plays the queue if set to false (via `Play()`) depending if true or not. Returns `#Paused`.
+`#PausedReason`: Reason we're paused. Can be "LostFocus" (BismoAudioPlayer no longer in focus inside the BismoVoiceChannel), "UserRequest" (called `Pause()`, or "Stopped" (hit the end of the queue).
+`PausedReason`: Read-only, returns private property `#PausedReason`
+`#CurrentSong`: Currently playing song object
+`CurrentSong`: Returns `#CurrentSong` if reading, or calls `Play(value)` if setting.
+`#Shuffle`: Shuffle status (true/false)
+`Shuffle`: Returns `#Shuffle` if reading, or calls `Shuffle(value)` if setting.
+`#Repeat`: Song repeat (0 = disabled, 1 = repeat (queue), 2 = loop (song))
+`Repeat`: Returns `#Repeat` if reading, or calls `Repeat(value)` if setting.
+
 
 
 ### Events
-`finish`, `song`: Song finished playing, includes the song object that finished
-`finish-queue`, `song`: Queue finished playing, includes this queue object
-`play`, `this.CurrentSong`: Playing a song, includes the ID of the song that playing
-`pause`, `song`: Paused(), playback paused, includes the song that was playing
-`next`, `this.CurrentSong`, `reason`: Next() called, playing next song, includes the current song Id and the reason for (I.E. undefined, UserRequest or EndOfSong)
-`loop`, `this`: Queue looped, includes this queue object
-`repeat`, `song`: Song looped, includes the song object
-`previous`, `this.CurrentSong`: Previous() called, playing the previous song, includes the current song Id
-`removed`, `song`: Removed a song from the queue, includes the song
-`destroyed`, `this.Id`: Queue has been destroyed, non-recoverable. Includes this queue Id, although kinda useless 
+`songFinish`, `{ song: Song }`: Song finished playing, includes the song object that finished
+`finish`: Queue finished playing
+`play`, `{ song: Song }`: Playing a song, includes the now playing song object
+`pause`, `{ song: Song }`: Paused(), playback paused, includes the song that was playing
+`next`, `{ nextSong: Song, previousSong: Song }`, Playing next song, includes the next song object and previously playing song object
+`loop`: Queue repeated (looped)
+`repeat`, `{ song: Song }`: Song repeated, includes the song object
+`previous`, `{ previousSong: Song, currentSong: Song }`: Previous() called, playing the previous song, includes the previous song object (about to play) and currently playing song object (about to no longer be playing).
+`removed`, `{ song: Song }`: Removed a song from the queue, includes the song
+`destroyed`: Queue has been destroyed, non-recoverable. 
 
 
 
@@ -136,7 +169,7 @@ If specified, removes `count` number of tracks after that song as well.  So `Rem
 ## Song Object
 
 ### Properties
-`Id`: Id of the song (usually the index of the song in the queue's songs array)
+`Id`: String, id of the song (UUID)
 `OriginalId`: Copy of the above, however, does not change when shuffle is enabled
 `Title`: Title of the song
 `Repeat`: Does the song loop when it ends?
