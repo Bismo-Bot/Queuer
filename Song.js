@@ -6,6 +6,7 @@
  * @typedef {import('./Queue.js')} Queue
  */
 const DiscordVoice = require('@discordjs/voice');
+const crypto = require("node:crypto");
 
 /**
  * Thrown when we attempt to modify a queue but have no queue parent set for the song
@@ -251,7 +252,7 @@ class Song {
      * 
      * @return {Object} Sterile Song object
      */
-    ToJson() {
+    ToJSON() {
         return {
             Title: this.Title,
             Id: this.Id,
@@ -266,7 +267,7 @@ class Song {
      * @return {string} Sterile Song object
      */
     ToString() {
-        return JSON.stringify(this.toJSON());
+        return JSON.stringify(this.ToJSON());
     }
 
     /**

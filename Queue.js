@@ -5,7 +5,7 @@ const Song = require('./song');//(Bismo);
 const EventEmitter = require('events');
 const DiscordVoice = require("@discordjs/voice");
 
-const crypto = require("node:crypto")
+const crypto = require("node:crypto");
 
 
 const NextTrackReason = Object.freeze({
@@ -18,6 +18,7 @@ const PauseReason = Object.freeze({
     LostBismoVoiceChannelFocus: "LostFocus",
     UserRequest: "UserRequest",
     Stopped: "Stopped",
+    EndOfQueue: "EndOfQueue",
 });
 const RepeatStatus = Object.freeze({
     None: 0,
@@ -48,7 +49,10 @@ class Queue extends EventEmitter {
      * The queue ID (UUID)
      * @type {string}
      */
-    Id = crypto.randomUUID();
+    #Id = crypto.randomUUID();
+    get Id() {
+        return this.#Id;
+    }
 
     /**
      * The guild we're playing in (or if personal, authorID)
@@ -282,6 +286,11 @@ class Queue extends EventEmitter {
         }
 
         this.#log = process.Bismo.LogMan.getLogger("Queue-" + this.#Id);
+
+        let actualThis = this;
+        process.Bismo.Events.bot.on('shutdown', () => {
+            actualThis.Destroy();
+        });
     }
 
 
@@ -290,8 +299,9 @@ class Queue extends EventEmitter {
      */
     async #CreatePlaybackMessage() {
         if (this.#PlaybackMessage == undefined || !(this.#PlaybackMessage instanceof Discord.Message)) {
+            let actualThis = this;
             this.#BismoVoiceChannel.ChannelObject.send("Queuer playback status message. You can view information about which is playing via this message. I'll pin it in this channel.").then(async (msg) => {
-                this.#PlaybackMessage = msg;
+                actualThis.#PlaybackMessage = msg;
                 if (msg.pinable) {
                     msg.pin("Pinning queue playback status message").then((pinMsg) => {
                         pinMsg.delete();
@@ -299,7 +309,7 @@ class Queue extends EventEmitter {
                 }
                 if (!msg.editable) {
                     msg.delete();
-                    this.#PlaybackMessage = await this.#BismoVoiceChannel.ChannelObject.send("My messages are not editable here. Playback message quality will be degraded!");
+                    actualThis.#PlaybackMessage = await actualThis.#BismoVoiceChannel.ChannelObject.send("My messages are not editable here. Playback message quality will be degraded!");
                 }
             });
         }
@@ -318,7 +328,7 @@ class Queue extends EventEmitter {
         if (!(song instanceof Song))
             throw new TypeError("song expected Song got " + (typeof song).toString());
 
-        for (var i = 0; i<this.#SongsOrder; i++) {
+        for (var i = 0; i<this.#SongsOrder.length; i++) {
             let index = this.#SongsOrder[i];
             if (index < this.#Songs.length && index >= 0)
                 if (this.#Songs[index].Id == song.Id)
@@ -331,12 +341,15 @@ class Queue extends EventEmitter {
      * 
      */
     #UpdatePlaybackMessage() {
-        if (this.playbackMessage != undefined) {
-            if (this.playbackMessage.editable)
-                if (this.paused) {
-                    this.playbackMessage.edit("[PAUSED] " + this.songs[this.currentSong].title);
+        if (this.#PlaybackMessage != undefined) {
+            if (this.#PlaybackMessage.editable)
+                if (this.#Paused) {
+                    if (this.#PausedReason == PauseReason.EndOfQueue || this.#PausedReason == PauseReason.Stopped)
+                        this.#PlaybackMessage.edit("Queue stopped");
+                    else
+                        this.#PlaybackMessage.edit("[PAUSED]: " + this.#CurrentSong.Title);
                 } else {
-                    this.playbackMessage.edit("Playing " + this.songs[this.currentSong].title);
+                    this.#PlaybackMessage.edit("Playing: " + this.#CurrentSong.Title);
                 }
         }
     }
@@ -352,31 +365,31 @@ class Queue extends EventEmitter {
      * @return {Song} The song object.
      */
     GetSong(id, offset) {
-        if (this.songs == undefined)
+        if (this.#Songs.length == 0)
             return undefined;
         if (offset == undefined)
             offset = 0;
 
         if (id instanceof Song) {
-            return this.GetSong(this.#GetSongQueueNumber(id));
+            return this.GetSong(this.#GetSongQueueNumber(id), offset);
         }
 
         if (typeof id === "string") {
-            for (var index = 0; i<this.songs.length; i++) {
+            for (var index = 0; i<this.#Songs.length; i++) {
                 if (this.#Songs[this.#SongsOrder[index]].Id == id) {
                     index += offset;
                     if (this.#SongsOrder.length >= index || index < 0)
                         return undefined;
                     else
-                        return this.#Sogns[this.#SongsOrder[index]];
+                        return this.#Songs[this.#SongsOrder[index]];
                 }
             }
         } else if (typeof id === "number") {
             let index = id + offset;
-            if (this.#SongsOrder.length >= index || index < 0)
-                return undefined;
+            if (index < this.#SongsOrder.length || index >= 0)
+                return this.#Songs[this.#SongsOrder[index]];
             else
-                return this.#Sogns[this.#SongsOrder[index]];
+                return undefined;
         }
         return undefined;
     }
@@ -392,7 +405,7 @@ class Queue extends EventEmitter {
             return false;
 
         if (this.#BismoAudioPlayer === undefined) {
-            this.BismoAudioPlayer = process.Bismo.VoiceManager.CreateBismoAudioPlayer({
+            this.#BismoAudioPlayer = process.Bismo.VoiceManager.CreateBismoAudioPlayer({
                 pluginName: "Queuer",
                 pluginPackage: "com.watsuprico.queuer",
                 name: "Queuer",
@@ -405,17 +418,19 @@ class Queue extends EventEmitter {
                     this.#PausedReason = PauseReason.LostBismoVoiceChannelFocus;
                     this.#BismoAudioPlayer.AudioPlayer.pause();
                     this.#UpdatePlaybackMessage();
+                    this.#log.silly("BAP (" + this.#BismoAudioPlayer.Id + ") became unfocused, playing.");
                 }
             });
 
             // Play on focus regain
-            this.#BismoAudioPlayer.on('unfocused', (focused) => {
+            this.#BismoAudioPlayer.on('focused', (focused) => {
                 if (data.Id == this.#BismoVoiceChannel.Id) {
                     if (this.#Paused && this.#PausedReason == PauseReason.LostBismoVoiceChannelFocus) {
                         this.#BismoAudioPlayer.AudioPlayer.unpause();
                         this.#Paused = false;
                         this.#PausedReason = PauseReason.NotPaused;
                         this.#UpdatePlaybackMessage();
+                        this.#log.silly("BAP (" + this.#BismoAudioPlayer.Id + ") became focused, playing.");
                     }
                 }
             });
@@ -437,25 +452,27 @@ class Queue extends EventEmitter {
 
             this.BismoVoiceChannel.GetVoiceConnection().setSpeaking(0); // No longer speaking
             this.emit('finish', { song: song });
-            this.#log.info("Finished: " + song.id);
+            this.#log.info("Finished: " + song.Title);
 
             if (this.#Repeat == RepeatStatus.Song) {
                 // Replay song...
                 this.emit("repeat", { song: this.#CurrentSong });
                 this.Play(this.#CurrentSong);
             } else
-                setTimeout(this.Next(), 500);
+                this.Next();
         });
 
         this.#BismoAudioPlayer.AudioPlayer.on(DiscordVoice.AudioPlayerStatus.AutoPaused, () => {
             this.#Paused = true;
             this.#PausedReason = PauseReason.LostBismoVoiceChannelFocus;
             this.#UpdatePlaybackMessage();
+            this.#log.silly("Auto paused");
         });
         this.#BismoAudioPlayer.AudioPlayer.on(DiscordVoice.AudioPlayerStatus.Playing, () => {
             this.#Paused = false;
             this.#PausedReason = PauseReason.NotPaused;
             this.#UpdatePlaybackMessage();
+            this.#log.silly("Playing BAP: " + this.#BismoAudioPlayer.Id);
         });
 
         this.#BismoAudioPlayer.AudioPlayer.on('error', error => {
@@ -469,7 +486,7 @@ class Queue extends EventEmitter {
             else
                 this.#Repeat = RepeatStatus.Queue; // Stop repeating song.
             
-            setTimeout(this.Next(), 2000);
+            this.Next();
         });
 
         this.#BismoVoiceChannel.Subscribe(this.#BismoAudioPlayer);
@@ -532,7 +549,7 @@ class Queue extends EventEmitter {
 
             this.VoiceConnection.setSpeaking(1);
 
-            this.UpdatePlaybackMessage();
+            this.#UpdatePlaybackMessage();
             this.#log.debug("Begun playing song: " + this.#CurrentSong.Title);
             this.#log.silly(this.#CurrentSong.ToString());
             this.events.emit("play", { song: this.#CurrentSong });
@@ -540,8 +557,9 @@ class Queue extends EventEmitter {
         }
 
 
-        if (song == undefined)
-            throw new TypeError("song expected Song got undefined");
+        if (song == undefined || !(song instanceof Song))
+            song = this.#Songs[this.#SongsOrder[0]]
+            // throw new TypeError("song expected Song got undefined");
 
         let stream = song.GetStreamData();
         if (stream == undefined)
@@ -571,9 +589,9 @@ class Queue extends EventEmitter {
 
         //song.AudioResource.volume.setVolume(this.volume/100);
 
-        this.#log.debug("Now playing song: " + this.#CurrentSong.Title + ".");
+        this.#log.info("Now playing song: " + this.#CurrentSong.Title + ".");
         this.#log.silly(this.#CurrentSong.ToString());
-        this.UpdatePlaybackMessage();
+        this.#UpdatePlaybackMessage();
     }
 
     /**
@@ -599,7 +617,7 @@ class Queue extends EventEmitter {
 
         let index = -1;
         if (song instanceof Song) {
-            index = this.#GetSongQueue(song);
+            index = this.#GetSongQueueNumber(song);
         } else if (typeof song === "number") {
             if (song >= this.#SongsOrder.length || song < 0)
                 Error("Provided song index is out of bounds. Our queue is not that big.");
@@ -627,22 +645,22 @@ class Queue extends EventEmitter {
      */
     Next(song) {
         if (song === undefined)
-            song = this.#CurrentSong;
+            song = this.CurrentSong;
 
         if ((song instanceof Song))
            if (this.#GetSongQueueNumber(song) == undefined)
                 return false; // Song is not even in the damn queue.
 
         let nextSong = this.GetSong(song, 1);
-        let nextSongIndex = this.#GetSongQueueNumber(song);
+        let nextSongIndex = this.#GetSongQueueNumber(nextSong);
 
         
         if (this.#Repeat == RepeatStatus.Song)
             this.#Repeat == RepeatStatus.Queue; // Switch to loop (next pressed by user)
 
-        if (this.#CurrentSong.Temporary) {
-            this.#log.debug("Removing temporary song: " + this.#CurrentSong.Title);
-            this.Remove(this.#CurrentSong); // Remove it
+        if (song.Temporary) {
+            this.#log.debug("Removing temporary song: " + song.Title);
+            this.Remove(song); // Remove it
         }
 
         if (nextSong == undefined) {
@@ -662,13 +680,14 @@ class Queue extends EventEmitter {
                 this.BismoVoiceChannel.GetVoiceConnection().setSpeaking(0);
 
                 this.#Paused = true;
-                this.#PausedReason = PauseReason.Stopped;
+                this.#PausedReason = PauseReason.EndOfQueue;
 
                 this.#HeadIndex = 0;
                 if (this.#Songs.length > 0)
                     this.#CurrentSong = this.#Songs[this.#SongsOrder[0]]
 
                 this.#log.debug("Queue finished.");
+                this.#UpdatePlaybackMessage();
                 return false;
             }
         } else {
@@ -746,11 +765,14 @@ class Queue extends EventEmitter {
 
                 song.Queue = this;
                 this.#Songs.push(song);
-                this.#SongsOrder.splice(queueIndex, 0, this.#Songs.length-1);
+                if (queueIndex < this.#SongsOrder.length && queueIndex >= 0 && this.#SongsOrder.length > 0)
+                    this.#SongsOrder.splice(queueIndex, 0, this.#Songs.length-1);
+                else
+                    this.#SongsOrder.push(this.#Songs.length-1);
 
-                if (this.#Songs.length == 1) {
+                if (this.#Songs.length == 1 || this.#PausedReason == PauseReason.EndOfQueue) {
                     // First song, begin playing!
-                    this.Play();
+                    this.Play(song);
                 }
 
                 return true;
@@ -924,13 +946,10 @@ class Queue extends EventEmitter {
         if (this.#PlaybackMessage != undefined)
             this.#PlaybackMessage.delete();
         
-        this.#BismoVoiceChannel.Destroy()
-        this.paused = true;
-        if (this.playbackMessage != undefined)
-            this.playbackMessage.delete();
-        delete this.songs;
-        this.events.emit("destroyed");
-        delete this.voiceChannel;
+        this.#BismoVoiceChannel.Destroy();
+
+        this.emit("destroyed", this.#Id);
+        delete this;
     }
 
 

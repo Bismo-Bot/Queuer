@@ -170,15 +170,10 @@ Plugin.CreateQueue = function (additionalData) {
 	
 	if (additionalData.voiceChannel == undefined)
 		if (typeof additionalData.voiceChannelID !== "string")
-			throw new TypeError("additionalData.voiceChannelID expected string got " + (typeof additionalData.voiceChannelID).toString());
+			throw new TypeError("additionalData.voiceChannelId expected string got " + (typeof additionalData.voiceChannelID).toString());
 		else
 			additionalData.voiceChannel = Bismo.GetGuildChannelObject(additionalData.guildID, additionalData.voiceChannelID);
 
-	if (additionalData.textChannel == undefined)
-		if (typeof additionalData.textChannelID !== "string")
-			throw new TypeError("additionalData.textChannelID expected string got " + (typeof additionalData.textChannelID).toString());
-		else
-			additionalData.textChannel = Bismo.GetGuildChannelObject(additionalData.guildID, additionalData.textChannelID);
 	
 
 	if (additionalData.voiceChannel === undefined)
@@ -186,25 +181,19 @@ Plugin.CreateQueue = function (additionalData) {
 	else if (additionalData.voiceChannel.type !== "GUILD_VOICE")
 		return undefined;
 
-	if (additionalData.textChannel != undefined)
-		if (additionalData.textChannel.type != "GUILD_TEXT")
-			additionalData.textChannel = undefined;
 
-	let queueID = additionalData.voiceChannel.id;
-	queue = new Queue(additionalData.guildID, additionalData.voiceChannel, {
-		queueID: queueID,
-		textChannel: additionalData.textChannel,
-		authorID: additionalData.userID,
+	queue = new Queue(additionalData.voiceChannel, {
+		authorId: additionalData.userId,
 	});
 
-	queue.events.on('destroyed', (queueID) => {
+	queue.on('destroyed', (queueID) => {
 		Bismo.log("Queue destroyed.");
 		Queues.delete(queueID);
 	});
 
-	Queues.set(queueID, queue);
-	QueueIDs.set(additionalData.voiceChannel.id, queueID);
-	QueueIDs.set(additionalData.guildID, queueID);
+	Queues.set(queue.Id, queue);
+	QueueIDs.set(additionalData.voiceChannel.id, queue.Id);
+	QueueIDs.set(additionalData.guildID, queue.Id);
 
 	return queue;
 }
