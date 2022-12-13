@@ -72,7 +72,7 @@ class Song {
      * @property {string} [Album] - Album the song belongs to
      * @property {number} [Duration] - Duration of song in MS
      * @property {number} [Year] - The release year of the track (optional)
-     * @property {number} AddedByUserID - The Discord ID of the user that added this song 
+     * @property {number} AddedByUserId - The Discord ID of the user that added this song 
      */
 
      /**
@@ -178,7 +178,7 @@ class Song {
      * 
      */
     Play() {
-        if (Queue != undefined)
+        if (this.Queue != undefined)
             this.Queue.Play(this);
         else
             throw new NoQueueError('Play');
@@ -188,7 +188,7 @@ class Song {
      * Pause the song (if playing)
      */
     Pause() {
-        if (Queue != undefined)
+        if (this.Queue != undefined)
             this.Queue.Pause(this);
         else
             throw new NoQueueError('Pause');

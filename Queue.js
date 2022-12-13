@@ -19,6 +19,7 @@ const PauseReason = Object.freeze({
     UserRequest: "UserRequest",
     Stopped: "Stopped",
     EndOfQueue: "EndOfQueue",
+    Disconnected: "Disconnected",
 });
 const RepeatStatus = Object.freeze({
     None: 0,
@@ -67,6 +68,13 @@ class Queue extends EventEmitter {
      * @type {string}
      */
     AuthorID;
+
+
+    /**
+     * Used to prevent multiple destroys from running at once
+     * @type {boolean}
+     */
+    #Destroying;
 
 
     // Audio things
@@ -150,7 +158,7 @@ class Queue extends EventEmitter {
         this.#SongsOrder = [];
         let songNumber = 0;
         for (var i = 0; i<songs.length; i++) {
-            if (songs[i] instanceof Song) {
+            if (typeof songs[i]?.Queue?.Id === "string") {
                 this.#Songs.push(Song);
                 this.#SongsOrder[songNumber] = songNumber;
                 songNumber++;
@@ -232,6 +240,26 @@ class Queue extends EventEmitter {
 
 
     /**
+     * User ids that have voted to skip
+     * @type {string[]}
+     */
+    #NextVotes;
+
+    /**
+     * User ids that have voted to go back
+     * @type {string[]}
+     */
+    #PreviousVotes;
+
+
+    /**
+     * Percentage of users required to vote a particular way to vote skip / go back
+     * @type {number}
+     */
+    VoteThreshold;
+
+
+    /**
      * Even listener.
      * 
      * List of events:
@@ -265,7 +293,7 @@ class Queue extends EventEmitter {
     constructor(voiceChannel, data) {
         super();
 
-        this.#BismoVoiceChannel = process.Bismo.VoiceManager.GetBismoVoiceChannel(voiceChannel)
+        this.#BismoVoiceChannel = process.Bismo.VoiceManager.GetBismoVoiceChannel(voiceChannel);
 
         if (data != undefined) {
             if (data.queueId != undefined) {
@@ -290,6 +318,11 @@ class Queue extends EventEmitter {
         let actualThis = this;
         process.Bismo.Events.bot.on('shutdown', () => {
             actualThis.Destroy();
+        });
+        this.#BismoVoiceChannel.on('disconnect', () => {
+            actualThis.#Paused = true;
+            actualThis.#PausedReason = PauseReason.Disconnected;
+            actualThis.#UpdatePlaybackMessage();
         });
     }
 
@@ -325,7 +358,7 @@ class Queue extends EventEmitter {
         if (song == undefined)
             return undefined;
 
-        if (!(song instanceof Song))
+        if (!(typeof song?.Queue?.Id === "string"))
             throw new TypeError("song expected Song got " + (typeof song).toString());
 
         for (var i = 0; i<this.#SongsOrder.length; i++) {
@@ -341,17 +374,25 @@ class Queue extends EventEmitter {
      * 
      */
     #UpdatePlaybackMessage() {
-        if (this.#PlaybackMessage != undefined) {
-            if (this.#PlaybackMessage.editable)
-                if (this.#Paused) {
-                    if (this.#PausedReason == PauseReason.EndOfQueue || this.#PausedReason == PauseReason.Stopped)
-                        this.#PlaybackMessage.edit("Queue stopped");
-                    else
-                        this.#PlaybackMessage.edit("[PAUSED]: " + this.#CurrentSong.Title);
-                } else {
-                    this.#PlaybackMessage.edit("Playing: " + this.#CurrentSong.Title);
-                }
-        }
+        try {
+            if (this.#PlaybackMessage != undefined) {
+                if (this.#PlaybackMessage.editable)
+                    if (this.#Paused) {
+                        if (this.#PausedReason == PauseReason.EndOfQueue)
+                            this.#PlaybackMessage.edit("Queue playback finished");
+                        else if (this.#PausedReason == PauseReason.Stopped)
+                            this.#PlaybackMessage.edit("Queue playback stopped");
+                        else if (this.#PausedReason == PauseReason.Disconnected)
+                            this.#PlaybackMessage.edit("Current song `" + this.#CurrentSong.Title + "` has been paused (bot disconnected).");
+                        else
+                            this.#PlaybackMessage.edit("Current song `" + this.#CurrentSong.Title + "` has been paused.");
+                    } else {
+                        this.#PlaybackMessage.edit("Now playing `#" + this.#GetSongQueueNumber(this.#CurrentSong) + "`: `" + this.#CurrentSong.Title + "`"
+                            + "\nArtist: `" + this.#CurrentSong.Metadata.Artist + "`"
+                            + "\nAdded by: `" + this.#CurrentSong.Metadata.AddedByUserId + "`");
+                    }
+            }
+        } catch (e) {}
     }
 
 
@@ -370,7 +411,7 @@ class Queue extends EventEmitter {
         if (offset == undefined)
             offset = 0;
 
-        if (id instanceof Song) {
+        if (typeof id?.Queue?.Id === "string") {
             return this.GetSong(this.#GetSongQueueNumber(id), offset);
         }
 
@@ -508,7 +549,7 @@ class Queue extends EventEmitter {
      * 
      * Moves the queue to the provided song and plays it
      * 
-     * @param {Song} [song] - The song to begin playing
+     * @param {(Song|number)} [song] - The song to begin playing (can also be the number inside the queue, that is track 2)
      * 
      * @throws {NoVoiceConnection}
      * @throws {NoVoiceChannel}
@@ -543,6 +584,8 @@ class Queue extends EventEmitter {
         }
 
         if (song == undefined && this.#CurrentSong != undefined) {
+            // Unpause
+
             this.#BismoAudioPlayer.AudioPlayer.unpause();
             this.#Paused = false;
             this.#PausedReason = PauseReason.NotPaused;
@@ -552,12 +595,17 @@ class Queue extends EventEmitter {
             this.#UpdatePlaybackMessage();
             this.#log.debug("Begun playing song: " + this.#CurrentSong.Title);
             this.#log.silly(this.#CurrentSong.ToString());
-            this.events.emit("play", { song: this.#CurrentSong });
+            this.emit("play", { song: this.#CurrentSong });
             return true;
         }
 
 
-        if (song == undefined || !(song instanceof Song))
+        if (typeof song === "number") {
+            if (song >= 0 && song < this.#SongsOrder.length)
+                song = this.#Songs[this.#SongsOrder[song]];
+        }
+
+        if (song == undefined || !(typeof song?.Queue?.Id === "string"))
             song = this.#Songs[this.#SongsOrder[0]]
             // throw new TypeError("song expected Song got undefined");
 
@@ -574,7 +622,7 @@ class Queue extends EventEmitter {
         this.#HeadIndex = songQueueNumber;
 
 
-        if (song.AudioResource == undefined) {
+        if (song.AudioResource == undefined || song.AudioResource.ended || !song.AudioResource.readable) {
             song.AudioResource = DiscordVoice.createAudioResource(stream, {
                 inputType: DiscordVoice.StreamType.WebmOpus,
                 metadata: {
@@ -588,6 +636,9 @@ class Queue extends EventEmitter {
         this.#BismoAudioPlayer.AudioPlayer.play(song.AudioResource);
 
         //song.AudioResource.volume.setVolume(this.volume/100);
+
+        this.#NextVotes = [];
+        this.#PreviousVotes = [];
 
         this.#log.info("Now playing song: " + this.#CurrentSong.Title + ".");
         this.#log.silly(this.#CurrentSong.ToString());
@@ -605,7 +656,7 @@ class Queue extends EventEmitter {
             this.#Paused = true;
             this.#PausedReason = PauseReason.UserRequest;
 
-            this.VoiceConnection().setSpeaking(0);
+            this.VoiceConnection.setSpeaking(0);
             
             this.#UpdatePlaybackMessage();
             this.emit("pause", { song: song });
@@ -616,7 +667,7 @@ class Queue extends EventEmitter {
 
 
         let index = -1;
-        if (song instanceof Song) {
+        if (typeof song?.Queue?.Id === "string") {
             index = this.#GetSongQueueNumber(song);
         } else if (typeof song === "number") {
             if (song >= this.#SongsOrder.length || song < 0)
@@ -647,7 +698,7 @@ class Queue extends EventEmitter {
         if (song === undefined)
             song = this.CurrentSong;
 
-        if ((song instanceof Song))
+        if ((typeof song?.Queue?.Id === "string"))
            if (this.#GetSongQueueNumber(song) == undefined)
                 return false; // Song is not even in the damn queue.
 
@@ -676,15 +727,24 @@ class Queue extends EventEmitter {
                 this.#log.debug("Queue looped");
                 return true;
             } else {
+                // End of queue
                 this.emit('finish');
                 this.BismoVoiceChannel.GetVoiceConnection().setSpeaking(0);
 
                 this.#Paused = true;
                 this.#PausedReason = PauseReason.EndOfQueue;
 
+                if (this.#BismoAudioPlayer.AudioPlayer.state == DiscordVoice.AudioPlayerStatus.Playing)
+                    this.#BismoAudioPlayer.AudioPlayer.pause();
+                this.VoiceConnection.setSpeaking(0);
+
                 this.#HeadIndex = 0;
                 if (this.#Songs.length > 0)
                     this.#CurrentSong = this.#Songs[this.#SongsOrder[0]]
+
+                // These are handled by the Play() method in the other scenarios
+                this.#NextVotes = [];
+                this.#PreviousVotes = [];
 
                 this.#log.debug("Queue finished.");
                 this.#UpdatePlaybackMessage();
@@ -708,7 +768,7 @@ class Queue extends EventEmitter {
         if (song === undefined)
             song = this.#CurrentSong;
 
-        if ((song instanceof Song))
+        if ((typeof song?.Queue?.Id === "string"))
            if (this.#GetSongQueueNumber(song) == undefined)
                 return false; // Song is not even in the damn queue.
 
@@ -727,10 +787,47 @@ class Queue extends EventEmitter {
             }
         }
 
-        this.emit('previous', { currentSong: this.#CurrentSong, previousSong: nextSong });
+        this.emit('previous', { currentSong: this.#CurrentSong, previousSong: prevSong });
         this.#HeadIndex = prevSongIndex;
         this.Play(prevSong);
         return true;
+    }
+
+
+    /**
+     * Allows users to vote skip.
+     * @param {string} userId - User id voting to skip
+     */
+    VoteNext(userId) {
+        if (!this.#BismoVoiceChannel.GetUserMemberOfVoiceChannel(userId))
+            return;
+
+        if (this.#NextVotes.indexOf(userId) <= -1) {
+            this.#NextVotes.push(userId);
+            if (this.#NextVotes.length > (this.#BismoVoiceChannel.GetNumberOfVoiceChannelMembers() * this.VoteThreshold)) {
+                this.Next();
+            } else {
+                this.#UpdatePlaybackMessage();
+            }
+        }
+    }
+
+    /**
+     * Allows users to vote to go back
+     * @param {string} userId - User id voting to go back
+     */
+    VotePrevious(userId) {
+        if (!this.#BismoVoiceChannel.GetUserMemberOfVoiceChannel(userId))
+            return;
+
+        if (this.#PreviousVotes.indexOf(userId) <= -1) {
+            this.#PreviousVotes.push(userId);
+            if (this.#PreviousVotes.length > (this.#BismoVoiceChannel.GetNumberOfVoiceChannelMembers() * this.VoteThreshold)) {
+                this.Previous();
+            } else {
+                this.#UpdatePlaybackMessage();
+            }
+        }
     }
 
 
@@ -742,13 +839,20 @@ class Queue extends EventEmitter {
 
     /**
      * Adds a song to the queue
-     * @param {Song} song - The song to be added to the queue
-     * @param {[AddOptions]} options - Additional options for adding the song
+     * @param {(Song|Song[])} song - The song to be added to the queue. Can be multiple at once
+     * @param {AddOptions} [options] - Additional options for adding the song
      * @throws {NoSuchSong}
      */
     Add(song, options) {
         if (options == undefined)
             options = {}
+
+        if (isArrayOfType(song, Song)) {
+            for (var i = 0; i<song.length; i++) {
+                this.Add(song[i], options);
+            }
+            return;
+        }
         
         if (song != undefined) {
             if (typeof song.GetStreamData == "function") {
@@ -834,15 +938,22 @@ class Queue extends EventEmitter {
 
     /**
      * Removes a song from the queue
-     * @param {(Song|number)} song - The song to remove from the queue
+     * @param {(Song|Song[]|number)} song - The song to remove from the queue
      */
     Remove(song) {
         if (song == undefined) {
             song = this.currentSong;
         }
 
+        if (isArrayOfType(song, Song) || isArrayOfType(song, "number")) {
+            for (var i = 0; i<song.length; i++) {
+                this.Add(song[i], options);
+            }
+            return;
+        }
+
         let index = this.#GetSongQueueNumber(song);
-        if ((song instanceof Song)) {
+        if (typeof song?.Queue?.Id === "string") {
             if (index == undefined) {
                 return false;
             }
@@ -884,10 +995,10 @@ class Queue extends EventEmitter {
         if (song == undefined || toSong == undefined)
             return;
 
-        if (typeof song !== "number" && !(song instanceof Song))
+        if (typeof song !== "number" && !(typeof song?.Queue?.Id === "string"))
            throw new TypeError("song expected Song or number not " + toString(typeof song));
-       if (typeof toSong !== "number" && !(toSong instanceof Song))
-           throw new TypeError("song expected Song or number not " + toString(typeof song));
+       if (typeof toSong !== "number" && !(typeof toSong?.Queue?.Id === "string"))
+           throw new TypeError("toSong expected Song or number not " + toString(typeof song));
 
         let songIndex = this.#GetSongQueueNumber(song);
         if (songIndex == undefined)
@@ -933,7 +1044,7 @@ class Queue extends EventEmitter {
         this.Pause();
         this.#PausedReason = PauseReason.Stopped;
         this.#UpdatePlaybackMessage();
-        this.#BismoAudioPlayer.Destroy();
+        this.#BismoVoiceChannel.Disconnect();
     }
 
 
@@ -943,8 +1054,13 @@ class Queue extends EventEmitter {
      * Disconnects the bot from the voice chat, cleans up the playback message, and destroys the queue.
      */
     Destroy() {
+        if (this.#Destroying)
+            return;
+
+        this.#Destroying = true;
+
         if (this.#PlaybackMessage != undefined)
-            this.#PlaybackMessage.delete();
+            setTimeout(() => { this.#PlaybackMessage.delete(); }, 500);
         
         this.#BismoVoiceChannel.Destroy();
 

@@ -28,7 +28,50 @@ Find the queue using the queueID, or additional data (VC ID->TC ID->Guild ID).
 
 
 ### Permissions
+Permissions are handled by the Queuer Plugin and are as follows:
+Create: `queuer.manage.create` (default: true)
+Delete (destroy): `queuer.manage.delete` (default: true)
+Disconnect: `queuer.manage.disconnect` (default: true)
 
+Set (queue playback) volume: `queuer.playback.volume` (default: false)
+Play: `queuer.playback.play` (default: true)
+Pause: `queuer.playback.pause` (default: true)
+Stop: `queuer.playback.stop` (default: true)
+Repeat: `queuer.playback.repeat` (default: true)
+	Queue: `queuer.playback.repeat.queue` (default: true)
+	Song: `queuer.playback.repeat.song` (default: true)
+
+Next: `queuer.playback.next` (default: true)
+Vote next: `queuer.playback.next.vote` (default: true)
+Previous: `queuer.playback.previous` (default: true)
+Vote previous: `queuer.playback.previous.vote` (default: true)
+
+
+
+Add (song): `queuer.manage.add` (default: true)
+Remove (song): `queuer.manage.remove` (default: true)
+Move (song): `queuer.manage.move` (default: true)
+Shuffle: `queuer.manage.shuffle` (default: true)
+
+
+Save the current queue `queuer.save`
+	for the guild to use: `queuer.save.guild` (default: false)
+	themselves: `queuer.save.personal` (default: true)
+
+Load (and set) the current queue: `queuer.load`
+	from the guild: `queuer.load.guild` (default: false)
+	from themselves (personal store): `queuer.load.personal` (default: true)
+
+
+Appending `.outsidevc` covers these permissions if the user is NOT inside the same voice channel as the queue.
+
+
+These permissions are inside the `Queuer.Permissions` object, with the default permission (allow / disallow) set in `Queuer.PermissionDefaults`.
+
+Permissions are to be handled by YOUR plugin (for the time being). Your plugin MUST check the permissions using `Queuer.HasPermission(guildId, userId, permission)` (you can use `Bismo.Permissions.UserHasPermission(guildId, userId, permission)`, but be sure to check the default permissions if the user does not have the permission set.)
+Realistically you only need to check the `Queuer.Permissions.Add` permission since queue management is done via the Queuer command itself.
+
+Same is for telling the user they do not have permission. You can get pre-written messages from `Queuer.GetPermissionMessage(permission)`, which returns the unauthorized message for a given message.
 
 
 
@@ -86,6 +129,12 @@ We know where we're at using the `#HeadIndex` property which is the current inde
 `Repeat`: Returns `#Repeat` if reading, or calls `Repeat(value)` if setting.
 
 
+`#NextVotes`: Array of user ids (strings) of users voting to skip the current song
+`#PreviousVotes`: Array of user ids (strings) of users voting to go to the previous song
+`VoteThreshold`: Percentage of users required to vote in order for the votes to go through (.6 => 60% of the voice channel users (minus bots) must vote before a vote goes through)
+
+
+
 
 ### Events
 `songFinish`, `{ song: Song }`: Song finished playing, includes the song object that finished
@@ -123,8 +172,8 @@ Currently will create a new VoiceConnection by forcing a join, while also creati
 
 `Pause([song])`: Pauses playback (only if song is undefined, or the ID provided is the currently playing song)
 
-`Next([song, reason])`: Skips the currently playing song in the queue. If paused, begins playback. If at the end of the queue, and reason is not because _"EndOfSong"_, moves the queue head to the beginning and starts playing (loops the queue).\
-Reason is optional and can either be _"UserRequest"_ or _"EndOfSong"_ (_EndOfSong_ is to tell the function that the previous song finished and that is why we're moving on. `Next()` is called when a song finishes.)
+`Next([song, reason])`: Skips the currently playing song in the queue. If paused, begins playback.
+`VoteNext(userId: string)`: Marks the user id as voting to skip this 
 
 `Add(song[, options])`: Adds a song to the queue. _If this is the first song added, begins playback_\
 `options`:
