@@ -9,7 +9,6 @@
 
 // Dependencies
 const Discord = require('discord.js');
-const { crypto_pwhash_STRPREFIX } = require('libsodium-wrappers');
 const Queue = require('./Queue');
 const Song = require('./Song.js');
 
@@ -45,13 +44,21 @@ class QueuerAPI {
 	 * @property {string} guildId - Guild the queue is in
 	 * @property {string} [queueId] - Actual id of the queue (no brainier)
 	 * @property {(Discord.VoiceChannel|string)} [voiceChannel] - Voice channel the queue is currently playing in. (object or id)
-	 * @property {Queue.ConstructorOptions} [newQueueOptions] - Options passed to CreateQueue -> new Queue()
+	 * @property {Queue.ConstructorData} [newQueueOptions] - Options passed to CreateQueue -> new Queue()
 	 */
 
 	constructor() {
 		this.#Queues = new Map();
 		this.#GuildIdToQueueIdMap = new Map();
 		this.#VoiceChannelIdToQueueIdMap = new Map();
+	}
+
+	/**
+	 * Used to obtain the stream for a !qplay song
+	 * @param {Song} song - Song data 
+	 */
+	PlaySong = function(song) {
+		return song.PluginData.PersistentData.URL
 	}
 
 
@@ -420,7 +427,7 @@ function MainHandler(message) {
 
 	} else if (cmd == "p") {
 		// play pause
-		if (queue.Paused) {
+		if (!queue.Paused) {
 			if (hasPermission(Queuer.Permissions.Pause))
 				queue.Pause();
 		} else {
@@ -460,7 +467,7 @@ function MainHandler(message) {
 				else if (setting == "disable" || setting == "off" || setting == "false")
 					queue.Shuffle(false);
 				else
-					queue.Shuffle();
+					queue.Shuffle = !queue.Shuffle;
 			}
 		}
 
@@ -490,20 +497,20 @@ function MainHandler(message) {
 			}
 
 			if (setting == 0)
-				queue.Repeat(0);
+				queue.Repeat = 0;
 			else if (setting == 1) {
 				if (queueRepeatPerm === true) {
-					queue.Repeat(1);
+					queue.Repeat = 1;
 				} else if (songRepeatPerm === true) {
-					queue.Repeat(2);
+					queue.Repeat = 2;
 				} else {
-					queue.Repeat(0);
+					queue.Repeat = 0;
 				}
 			} else if (setting == 2) {
 				if (songRepeatPerm === true) {
-					queue.Repeat(2);
+					queue.Repeat = 2;
 				} else {
-					queue.Repeat(0);
+					queue.Repeat = 0;
 				}
 			}
 		} else {
@@ -516,6 +523,53 @@ function MainHandler(message) {
 
 
 /**
+ * @param {import('./../../bismo.js').BismoCommandExecuteData} message
+ */
+function PlayAttachedFile(message) {
+	let voiceChannel = message.message.member.voice.channel;
+	if (!voiceChannel)
+		return message.Reply("You must join a voice channel first.");
+
+	let permissions = voiceChannel.permissionsFor(message.message.client.user);
+ 	if (!permissions.has("CONNECT") || !permissions.has("SPEAK")) {
+		return message.Reply("I cannot join and speak in your voice channel, try a different one.");
+	}
+
+	message.message.delete();
+
+	let url = message.args[0];
+	let title = url
+
+	let attachment = message.message.attachments.first();
+	if (attachment && attachment.contentType.startsWith('audio')) {
+		url = attachment.url
+		title = attachment.name
+	}
+
+
+	if (url !== undefined && message.guild !== undefined) {
+		let song = new Song((title !== undefined? title : url), {
+			AddedByUserId: message.author.id,
+			Artist: message.author.username,
+			Duration: 0,
+		}, {
+			PluginPackageName: "com.watsuprico.queuer",
+			MethodName: "PlaySong",
+			PersistentData: {
+				URL: url
+			}
+		})
+
+		Queuer.AddSong(song, {
+			guildId: message.guild.id,
+			voiceChannel: voiceChannel,
+			newQueueOptions: { authorId: message.author.id },
+		});
+	}
+}
+
+
+/**
  * @param {BismoRequests} Requests
  */
 function main(Requests) {
@@ -523,7 +577,7 @@ function main(Requests) {
 
 	Bismo.RegisterCommand("q", MainHandler, {
 		description: "Manage the voice channel audio queue.",
-		helpMessage: "Usage: \`!queuer [options]\`"
+		helpMessage: "Usage: \`!q [options]\`"
 						+ "\nOptions:"
 						+ "\n\`pause\`: pauses playback"
 						+ "\n\`play [-song <number>]\`: resume playback, or plays a given song"
@@ -541,6 +595,16 @@ function main(Requests) {
 		guildRequried: true,
 		slashCommand: false,
 	});
+
+
+
+	Bismo.RegisterCommand("qplay", PlayAttachedFile, {
+		description: "Play an attached audio file in a message.",
+		helpMessage: "Usage: \`!qplay [url]\`.\nBe sure to attach an MP3 or other audio file if you do not include a URL!",
+		requireParams: false,
+		slashCommand: false,
+		guildRequired: true,
+	})
 }
 
 

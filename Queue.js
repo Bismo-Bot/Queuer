@@ -327,13 +327,23 @@ class Queue extends EventEmitter {
     }
 
 
+    #_creatingPlaybackMessage = false;
+
     /**
      * Creates the playback message
      */
     async #CreatePlaybackMessage() {
-        if (this.#PlaybackMessage == undefined || !(this.#PlaybackMessage instanceof Discord.Message)) {
-            let actualThis = this;
-            this.#BismoVoiceChannel.ChannelObject.send("Queuer playback status message. You can view information about which is playing via this message. I'll pin it in this channel.").then(async (msg) => {
+        let actualThis = this;
+        if (actualThis.#_creatingPlaybackMessage)
+            return;
+
+        actualThis.#_creatingPlaybackMessage = true;
+
+        let sendMessage = function() {
+            if (actualThis.#BismoVoiceChannel === undefined || actualThis.#BismoVoiceChannel.ChannelObject === undefined)
+                return;
+
+            actualThis.#BismoVoiceChannel.ChannelObject.send("Queuer playback status message. You can view information about which is playing via this message. I'll pin it in this channel.").then(async (msg) => {
                 actualThis.#PlaybackMessage = msg;
                 if (msg.pinable) {
                     msg.pin("Pinning queue playback status message").then((pinMsg) => {
@@ -343,9 +353,31 @@ class Queue extends EventEmitter {
                 if (!msg.editable) {
                     msg.delete();
                     actualThis.#PlaybackMessage = await actualThis.#BismoVoiceChannel.ChannelObject.send("My messages are not editable here. Playback message quality will be degraded!");
+                } else {
+                    actualThis.#UpdatePlaybackMessage(true);
                 }
+
+                actualThis.#_creatingPlaybackMessage = false;
             });
         }
+        if (this.#PlaybackMessage == undefined || !(this.#PlaybackMessage instanceof Discord.Message)) {
+            sendMessage();
+            return;
+        }
+
+        this.#PlaybackMessage.channel.messages.fetch(this.#PlaybackMessage.id).then((message) => {
+            if (message === undefined)
+                sendMessage();
+            if (!message.editable) {
+                if (message.deletable)
+                    message.delete();
+                sendMessage();
+            }
+
+            actualThis.#_creatingPlaybackMessage = false;
+        }).catch(() => {
+            sendMessage();
+        });
     }
 
 
@@ -371,28 +403,48 @@ class Queue extends EventEmitter {
 
     /**
      * Updates the playback message to show the current playback status.
-     * 
+     * @param {boolean} calledByCreate - Whether or not the #CreatePlaybackMessage() method called this or not. If so, do not call that method.
      */
-    #UpdatePlaybackMessage() {
+    async #UpdatePlaybackMessage(calledByCreate) {
         try {
             if (this.#PlaybackMessage != undefined) {
-                if (this.#PlaybackMessage.editable)
+                this.#PlaybackMessage.channel.messages.fetch(this.#PlaybackMessage.id).then((message) => {
+                    if (!message.editable) {
+                        if (message.deletable)
+                            message.delete();
+                        
+                        if (!calledByCreate)
+                            this.#CreatePlaybackMessage();
+                        return;
+                    }
+
                     if (this.#Paused) {
                         if (this.#PausedReason == PauseReason.EndOfQueue)
-                            this.#PlaybackMessage.edit("Queue playback finished");
+                            message.edit("Queue playback finished");
                         else if (this.#PausedReason == PauseReason.Stopped)
-                            this.#PlaybackMessage.edit("Queue playback stopped");
+                            message.edit("Queue playback stopped");
                         else if (this.#PausedReason == PauseReason.Disconnected)
-                            this.#PlaybackMessage.edit("Current song `" + this.#CurrentSong.Title + "` has been paused (bot disconnected).");
+                            message.edit("Current song `" + this.#CurrentSong.Title + "` has been paused (bot disconnected).");
                         else
-                            this.#PlaybackMessage.edit("Current song `" + this.#CurrentSong.Title + "` has been paused.");
+                            message.edit("Current song `" + this.#CurrentSong.Title + "` has been paused.");
                     } else {
-                        this.#PlaybackMessage.edit("Now playing `#" + this.#GetSongQueueNumber(this.#CurrentSong) + "`: `" + this.#CurrentSong.Title + "`"
+                        message.edit("Now playing `#" + this.#GetSongQueueNumber(this.#CurrentSong) + "`: `" + this.#CurrentSong.Title + "`"
                             + "\nArtist: `" + this.#CurrentSong.Metadata.Artist + "`"
                             + "\nAdded by: `" + this.#CurrentSong.Metadata.AddedByUserId + "`");
                     }
+                }).catch((err) => {
+                    this.#log.error("Failed to update playback message, error: " + err.message);
+                    this.#log.error(err, false);
+                    if (!calledByCreate)
+                        this.#CreatePlaybackMessage();
+                });
             }
-        } catch (e) {}
+        } catch (e) {
+            this.#log.error("Failed to update playback message, error: " + err.message);
+            this.#log.error(err, false);
+            if (!calledByCreate)
+                this.#CreatePlaybackMessage();
+        }
     }
 
 
@@ -442,7 +494,7 @@ class Queue extends EventEmitter {
      */
     #JoinVoiceChannel() {
         let voiceConnection = this.#BismoVoiceChannel.Connect();
-        if (voiceConnection.state == DiscordVoice.VoiceConnectionStatus.Destroyed || voiceConnection.state == DiscordVoice.VoiceConnectionStatus.Disconnected)
+        if (voiceConnection !== undefined && (voiceConnection.state == DiscordVoice.VoiceConnectionStatus.Destroyed || voiceConnection.state == DiscordVoice.VoiceConnectionStatus.Disconnected))
             return false;
 
         if (this.#BismoAudioPlayer === undefined) {
@@ -624,12 +676,13 @@ class Queue extends EventEmitter {
 
         if (song.AudioResource == undefined || song.AudioResource.ended || !song.AudioResource.readable) {
             song.AudioResource = DiscordVoice.createAudioResource(stream, {
+                inlineVolume: false,
                 inputType: DiscordVoice.StreamType.WebmOpus,
                 metadata: {
                     title: song.title,
                     queueID: this.#Id,
                     songID: song.id,
-                },
+                }
             });
         }
             
@@ -1060,7 +1113,7 @@ class Queue extends EventEmitter {
         this.#Destroying = true;
 
         if (this.#PlaybackMessage != undefined)
-            setTimeout(() => { this.#PlaybackMessage.delete(); }, 500);
+            setTimeout(() => { this.#PlaybackMessage.delete().catch(() => {}); }, 500);
         
         this.#BismoVoiceChannel.Destroy();
 
