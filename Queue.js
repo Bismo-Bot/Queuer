@@ -1,7 +1,7 @@
 // Queue 'class'
 
 const Discord = require("discord.js");
-const Song = require('./song');//(Bismo);
+const Song = require('./Song.js');//(Bismo);
 const EventEmitter = require('events');
 const DiscordVoice = require("@discordjs/voice");
 
@@ -56,11 +56,16 @@ class Queue extends EventEmitter {
     }
 
     /**
-     * The guild we're playing in (or if personal, authorID)
+     * @type {string}
+     * Unofficial guild id, used until the voice channel/BVC is brought up
+     */
+    #GuildId;
+    /**
+     * The guild we're playing in (or if personal, authorId)
      * @type {string}
      */
     get GuildId() {
-        return this.VoiceChannel.guildId;
+        return this.VoiceChannel?.guildId || this.#GuildId;
     };
 
     /**
@@ -143,7 +148,7 @@ class Queue extends EventEmitter {
     // Gets the current songs as they're ordered
     get Songs() {
         let songs = [];
-        for (var i = 0; this.#SongsOrder.length; i++) {
+        for (var i = 0; i<this.#SongsOrder.length; i++) {
             if (this.#SongsOrder[i] < this.#Songs.length && this.#SongsOrder[i] >= 0)
                 songs.push(this.#Songs[this.#SongsOrder[i]]);
         }
@@ -293,7 +298,8 @@ class Queue extends EventEmitter {
     constructor(voiceChannel, data) {
         super();
 
-        this.#BismoVoiceChannel = process.Bismo.VoiceManager.GetBismoVoiceChannel(voiceChannel);
+        this.#BismoVoiceChannel = global.Bismo.VoiceManager.GetBismoVoiceChannel(voiceChannel);
+        this.#GuildId = voiceChannel.guildId;
 
         if (data != undefined) {
             if (data.queueId != undefined) {
@@ -313,10 +319,10 @@ class Queue extends EventEmitter {
             }
         }
 
-        this.#log = process.Bismo.LogMan.getLogger("Queue-" + this.#Id);
+        this.#log = global.Bismo.LogMan.getLogger("Queue-" + this.#Id);
 
         let actualThis = this;
-        process.Bismo.Events.bot.on('shutdown', () => {
+        global.Bismo.Events.bot.on('shutdown', () => {
             actualThis.Destroy();
         });
         this.#BismoVoiceChannel.on('disconnect', () => {
@@ -405,10 +411,10 @@ class Queue extends EventEmitter {
      * Updates the playback message to show the current playback status.
      * @param {boolean} calledByCreate - Whether or not the #CreatePlaybackMessage() method called this or not. If so, do not call that method.
      */
-    async #UpdatePlaybackMessage(calledByCreate) {
+    #UpdatePlaybackMessage(calledByCreate) {
         try {
             if (this.#PlaybackMessage != undefined) {
-                this.#PlaybackMessage.channel.messages.fetch(this.#PlaybackMessage.id).then((message) => {
+                this.#PlaybackMessage.channel.messages.fetch(this.#PlaybackMessage.id).then(async (message) => {
                     if (!message.editable) {
                         if (message.deletable)
                             message.delete();
@@ -424,13 +430,16 @@ class Queue extends EventEmitter {
                         else if (this.#PausedReason == PauseReason.Stopped)
                             message.edit("Queue playback stopped");
                         else if (this.#PausedReason == PauseReason.Disconnected)
-                            message.edit("Current song `" + this.#CurrentSong.Title + "` has been paused (bot disconnected).");
+                            message.edit("Current song `" + this.#CurrentSong?.Title || "`undefined`" + "` has been paused (bot disconnected).");
                         else
-                            message.edit("Current song `" + this.#CurrentSong.Title + "` has been paused.");
+                            message.edit("Current song `" + this.#CurrentSong?.Title || "undefined" + "` has been paused.");
                     } else {
-                        message.edit("Now playing `#" + this.#GetSongQueueNumber(this.#CurrentSong) + "`: `" + this.#CurrentSong.Title + "`"
-                            + "\nArtist: `" + this.#CurrentSong.Metadata.Artist + "`"
-                            + "\nAdded by: `" + this.#CurrentSong.Metadata.AddedByUserId + "`");
+                        let username = await this.#PlaybackMessage.guild.members.fetch(this.#CurrentSong.Metadata?.AddedByUserId)
+                        username = username.nickname || username.user.globalName;
+                        username = username || "???"
+                        message.edit("Now playing `#" + this.#GetSongQueueNumber(this.#CurrentSong) + "`: `" + this.#CurrentSong?.Title + "`"
+                            + "\nArtist: `" + this.#CurrentSong?.Metadata?.Artist + "`"
+                            + "\nAdded by: `" + username + "`");
                     }
                 }).catch((err) => {
                     this.#log.error("Failed to update playback message, error: " + err.message);
@@ -498,7 +507,7 @@ class Queue extends EventEmitter {
             return false;
 
         if (this.#BismoAudioPlayer === undefined) {
-            this.#BismoAudioPlayer = process.Bismo.VoiceManager.CreateBismoAudioPlayer({
+            this.#BismoAudioPlayer = global.Bismo.VoiceManager.CreateBismoAudioPlayer({
                 pluginName: "Queuer",
                 pluginPackage: "com.watsuprico.queuer",
                 name: "Queuer",
@@ -705,7 +714,9 @@ class Queue extends EventEmitter {
      */
     Pause(song) {
         if (song == undefined) {
-            this.#BismoAudioPlayer.AudioPlayer.pause();
+            if (this.#BismoAudioPlayer != undefined)
+                this.#BismoAudioPlayer.AudioPlayer.pause();
+
             this.#Paused = true;
             this.#PausedReason = PauseReason.UserRequest;
 
@@ -1113,7 +1124,10 @@ class Queue extends EventEmitter {
         this.#Destroying = true;
 
         if (this.#PlaybackMessage != undefined)
-            setTimeout(() => { this.#PlaybackMessage.delete().catch(() => {}); }, 500);
+            setTimeout(() => {
+                this.#log("Deleting playback message " + this.#PlaybackMessage.id);
+                this.#PlaybackMessage.delete().catch(() => {});
+            }, 250); // delay is because the message will get updated, we can't delete it before updating. Smart move would be to not update deleted messages.
         
         this.#BismoVoiceChannel.Destroy();
 
@@ -1132,22 +1146,86 @@ class Queue extends EventEmitter {
 
     /**
      * @typedef {object} saveOptions
-     * @property {number} [saveLocation = 2] - Where the queue is being saved. 0 = guild, 1 = guildPersonal (only that user can view it), 2 = personal (personal storage)
-     * @property {string} [guildID] - The guild we're saving this to
-     * @property {boolean} [guild = false] - Whether or not we're saving to a guild or a user's profile (private call)
-     * 
+     * @property {number} [location = 2] - Where the queue is being saved. 0 = guild, 1 = guildPersonal (only that user can view it), 2 = personal (personal storage)
      */
     /**
      * Saves the queue to disk. Wrapper for Queuer.SaveQueue(this, ...)
      * 
      * @param {string} name - Name for the queue
-     * @param {string} authorID - The Discord user ID of the user trying to save this queue
+     * @param {string} authorId - The Discord user ID of the user trying to save this queue
      * @param {saveOptions} saveOptions - Additional options for saving this queue
      */
-    Save(name, authorID, saveOptions) {
+    Save(name, authorId, saveOptions) {
+        if (typeof name !== "string")
+            throw new TypeError("name expected string got " + (typeof name).toString());
+        if (typeof authorId !== "string")
+            throw new TypeError("authorId expected string got " + (typeof authorId).toString());
 
+        if (this.#Songs.length <= 0) {
+            return; // no songs to save.
+        }
+
+        this.#log.debug(`Saving ${this.#Songs.length} songs for ${authorId}' in guild ${this.GuildId}.`);
+
+        let saveQueue = global.Bismo.GetPluginFunction("com.bismo.queuer", "SaveQueue");
+        saveOptions = saveOptions || {};
+        saveOptions.author = authorId;
+        saveQueue(this, name, saveOptions);
     }
 
+    /**
+     * Loads the queue from disk. Wrapper for Queuer.LoadQueue(this, ...)
+     * 
+     * @param {string} name - Name for the queue
+     * @param {string} authorId - The Discord user ID of the user trying to save this queue
+     * @param {saveOptions} saveOptions - Additional options for saving this queue
+     * @return {boolean} Whether any songs were loaded or not.
+     */
+    Load(name, authorId, loadOptions) {
+        let loadQueue = global.Bismo.GetPluginFunction("com.bismo.queuer", "LoadQueue");
+
+        loadOptions = loadOptions || {};
+        loadOptions.author = authorId;
+        let songs = loadQueue(this.GuildId, name, loadOptions)?.songs;
+        if (songs != undefined) {
+            this.#log.debug(`Loading ${songs.length} songs for ${authorId}' in guild ${this.GuildId}.`);
+            this.FromJson(songs);
+            if (this.#Paused) {
+                this.Play();
+            }
+            return true;
+        } else {
+            this.#log.info("No songs to load from " + name);
+            return false;
+        }
+    }
+
+    /**
+     * Returns an JSON array of the songs that can then be used to load into a Queue later.
+     * @return {string[]} Songs array
+     */
+    ToJson() {
+        let json = [];
+
+        for (let i = 0; i<this.#Songs.length; i++) {
+            json.push(this.#Songs[i].ToJSON());
+        }
+
+        return json;
+    }
+
+    FromJson(json) {
+        if (!Array.isArray(json))
+            throw new TypeError("json expected an array, got " + (typeof json).toString());
+
+        for (let i = 0; i<json.length; i++) {
+            let songJson = json[i];
+
+            let song = new Song(songJson, this);
+            console.log(song);
+            this.Add(song);
+        }
+    }
 }
 
 

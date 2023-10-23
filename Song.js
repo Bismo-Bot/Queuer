@@ -9,6 +9,11 @@ const DiscordVoice = require('@discordjs/voice');
 const crypto = require("node:crypto");
 
 /**
+ * @type {import('./../../src/Bismo.js')}
+ */
+var Bismo = global.Bismo;
+
+/**
  * Thrown when we attempt to modify a queue but have no queue parent set for the song
  * (We try to play the song but do not have a queue to play on)
  * 
@@ -73,6 +78,7 @@ class Song {
      * @property {number} [Duration] - Duration of song in MS
      * @property {number} [Year] - The release year of the track (optional)
      * @property {number} AddedByUserId - The Discord ID of the user that added this song 
+     * @property {number} AddedByUserName - The Discord display name (guild nickname) for the user that added this song.
      */
 
      /**
@@ -111,12 +117,15 @@ class Song {
      * 
      */
     constructor(title, metadata, pluginData, queue, isTemporary) {
-        if ((typeof title === "string" || typeof title == "object" ) && (metadata == undefined && pluginData == undefined && queue == undefined && isTemporary == undefined)) {
+        if ((typeof title === "string" || typeof title == "object" ) && (pluginData == undefined && queue == undefined && isTemporary == undefined)) {
             // attempt to load via FromString() or FromJson()?
+            this.Queue = metadata;
+
             if (typeof title === "string")
                 this.FromString(title);
             else if (typeof title === "object")
                 this.FromJson(title);
+
 
         } else {
             if (typeof Queue === "object")
@@ -159,9 +168,9 @@ class Song {
                     MethodName = PluginData.MethodName.replace(" ","");
 
 
-        let func = process.Bismo.GetPluginMethod(this.PluginData.PluginPackageName, MethodName, true);
+        let func = Bismo.GetPluginFunction(this.PluginData.PluginPackageName, MethodName, true);
         if (func == undefined && MethodName != "PlaySong")
-            func = process.Bismo.GetPluginMethod(this.PluginPackageName, "PlaySong", true);
+            func = Bismo.GetPluginFunction(this.PluginPackageName, "PlaySong", true);
 
         if (typeof func == "function")
             return func(this);
@@ -259,6 +268,7 @@ class Song {
             Repeat: this.Repeat,
             Temporary: this.Temporary,
             PluginData: this.PluginData,
+            Metadata: this.Metadata,
         }
     }
 
@@ -279,7 +289,7 @@ class Song {
         if (typeof data !== "object")
             throw new TypeError("data expected object got " + (typeof data).toString());
 
-        if (typeof data.Id !== "string" || typeof data.Id !== "number")
+        if (typeof data.Id !== "string" && typeof data.Id !== "number")
             throw new TypeError("data.Id expected string or number, got " + (typeof data.Id).toString());
         data.OriginalId = data.Id;
 
@@ -309,6 +319,7 @@ class Song {
         this.Temporary = data.Temporary;
         this.OriginalId = data.OriginalId;
         this.PluginData = data.PluginData;
+        this.Metadata = data.Metadata;
 
     }
 

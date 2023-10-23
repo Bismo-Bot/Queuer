@@ -9,14 +9,29 @@
 
 // Dependencies
 const Discord = require('discord.js');
-const Queue = require('./Queue');
+const Queue = require('./Queue.js');
 const Song = require('./Song.js');
 
 
 /**
- * @type {import('./../../bismo.js').Bismo}
+ * @type {import('./../../src/Bismo.js')}
  */
 var Bismo = {}
+/**
+ * @type {import('./../../src/LogMan.js').Logger}
+ */
+let log = {};
+
+/**
+ * @param {string} name - Name of the json config. This is placed inside the data directory in a special folder for this plugin.
+ * @return {object}
+ */
+let ReadJson = function(name) {}
+/**
+ * @param {string} data - Data to write to the file.
+ * @param {string} name - Name of the json config. This is placed inside the data directory in a special folder for this plugin.
+ */
+let WriteJson = function(data, name) {};
 
 
 class QueuerAPI {
@@ -81,7 +96,7 @@ class QueuerAPI {
 
 		let grrMondays = this;
 		function tryThis(value) {
-			if (typeof value !== "string")
+			if (typeof value !== "string" || value == undefined)
 				return;
 
 			let queueId = value;
@@ -95,12 +110,13 @@ class QueuerAPI {
 		}
 
 		if (searchParameters instanceof Discord.VoiceChannel)
-			return tryThis(value.id);
+			return tryThis(searchParameters.id);
 
 		if (typeof searchParameters === "object") {
 			let queue = tryThis(searchParameters.guildId);
-			if (queue instanceof Queue)
+			if (queue instanceof Queue) {
 				return queue;
+			}
 
 			queue = tryThis(searchParameters.queueId);
 			if (queue instanceof Queue)
@@ -110,8 +126,11 @@ class QueuerAPI {
 				queue = tryThis(searchParameters.voiceChannel.id);
 			else
 				queue = tryThis(searchParameters.voiceChannel)
+
 			if (queue instanceof Queue)
 				return queue;
+
+			return;
 		}
 
 		return tryThis(searchParameters);
@@ -134,39 +153,44 @@ class QueuerAPI {
 	 * @return {Queue} newly created queue 
 	 */
 	CreateQueue = function(voiceChannel, options) {
-		if (!(voiceChannel instanceof Discord.VoiceChannel))
-			throw new TypeError("voiceChannel expected instance of Discord.VoiceChannel.");
+		try {
+			if (!(voiceChannel instanceof Discord.VoiceChannel))
+				throw new TypeError("voiceChannel expected instance of Discord.VoiceChannel.");
 
-		let newQueue = new Queue(voiceChannel, options);
+			let newQueue = new Queue(voiceChannel, options);
 
-		// Listen for voice channel moves (update the VoiceChannelIdToQueueIdMap)
-		let realThis = this;
-		newQueue.BismoVoiceChannel.on('moved', (oldChannel, newChannel) => {
-			if (realThis.#VoiceChannelIdToQueueIdMap.has(oldChannel.id)) {
-				realThis.#VoiceChannelIdToQueueIdMap.delete(oldChannel.id);
-			}
+			// Listen for voice channel moves (update the VoiceChannelIdToQueueIdMap)
+			let realThis = this;
+			newQueue.BismoVoiceChannel.on('moved', (oldChannel, newChannel) => {
+				if (realThis.#VoiceChannelIdToQueueIdMap.has(oldChannel.id)) {
+					realThis.#VoiceChannelIdToQueueIdMap.delete(oldChannel.id);
+				}
 
-			realThis.#VoiceChannelIdToQueueIdMap.set(newChannel.id, newQueue.Id);
-		});
+				realThis.#VoiceChannelIdToQueueIdMap.set(newChannel.id, newQueue.Id);
+			});
 
-		// Clean up on removal
-		newQueue.on('destroyed', (queueId) => {
-			realThis.#Queues.delete(queueId);
+			// Clean up on removal
+			newQueue.on('destroyed', (queueId) => {
+				realThis.#Queues.delete(queueId);
 
+				let gId = [...realThis.#GuildIdToQueueIdMap.keys()].find(key => realThis.#GuildIdToQueueIdMap.get(key) === queueId);
+				realThis.#GuildIdToQueueIdMap.delete(gId);
 
-			let gId = [...realThis.#GuildIdToQueueIdMap.keys()].find(key => realThis.#GuildIdToQueueIdMap.get(key) === queueId);
-			realThis.#GuildIdToQueueIdMap.delete(gId);
+				let vcId = [...realThis.#VoiceChannelIdToQueueIdMap.keys()].find(key => realThis.#VoiceChannelIdToQueueIdMap.get(key) === queueId);
+				realThis.#VoiceChannelIdToQueueIdMap.delete(vcId);
+			});
 
-			let vcId = [...realThis.#VoiceChannelIdToQueueIdMap.keys()].find(key => realThis.#VoiceChannelIdToQueueIdMap.get(key) === queueId);
-			realThis.#VoiceChannelIdToQueueIdMap.delete(vcId);
-		});
+			// Add
+			this.#Queues.set(newQueue.Id, newQueue);
+			this.#GuildIdToQueueIdMap.set(newQueue.GuildId, newQueue.Id);
+			this.#VoiceChannelIdToQueueIdMap.set(newQueue.VoiceChannel.id, newQueue.Id);
 
-		// Add
-		this.#Queues.set(newQueue.Id, newQueue);
-		this.#GuildIdToQueueIdMap.set(newQueue.GuildId, newQueue.Id);
-		this.#VoiceChannelIdToQueueIdMap.set(newQueue.VoiceChannel.id, newQueue.Id);
-
-		return newQueue;
+			return newQueue;
+		} catch (E) {
+			log.error("Error creating a new queue for VC " + voiceChannel?.id);
+			log.error(E);
+			throw E;
+		}
 	}
 
 
@@ -230,6 +254,155 @@ class QueuerAPI {
 		return (userValue === undefined)? defaultValue : userValue; // Return default if user does not have it set, otherwise user permission
 	}
 
+	static SaveLocations = Object.freeze({
+		// Any members of a guild can load this queue.
+		"Guild": 0,
+		// Only the author (in any guild) can load this queue.
+		"Personal": 2
+	})
+
+
+	/*
+
+	The layout of the saved queues file: 
+	
+	{
+		queues: {
+			userId: {
+				queueName: {
+					songs: [],
+				},
+			},
+
+			guildId: {
+				queueName: {
+					songs: [], -- Songs (json) array
+				},
+			}
+		},
+	}
+
+
+	*/
+
+	/**
+	 * @typedef {object} QueueStorageOptions
+	 * @property {QueuerAPI.SaveLocations} [location=QueuerAPI.SaveLocations.Personal] - Where and who can access this save queue.
+	 * @property {string} author - Discord user id of the user that wants to save this queue.
+	 */
+
+	/**
+	 * Saves a queue to storage.
+	 * @param {Queue} queue - The queue to save.
+	 * @param {string} name - Friendly name of the queue (think of this like a playlist name).
+	 * @param {QueueStorageOptions} [options] - Storage options, such as the guild and username.
+	 * @return {void}
+	 */
+	SaveQueue(queue, name, options) {
+		if (!(queue instanceof Queue))
+			throw new TypeError("queue expected to be instance of Queue.");
+		if (typeof name !== "string")
+			throw new TypeError("name expected string got " + (typeof name).toString());
+		if (typeof options?.author !== "string")
+			throw new TypeError("options.author expected string got " + (typeof options?.author).toString());
+
+		name = name.toLowerCase();
+
+		log.debug("Reading saved queues file.");
+		let savedQueues = ReadJson("savedQueues");
+		if (savedQueues == undefined)
+			savedQueues = {};
+		if (savedQueues.queues == undefined)
+			savedQueues.queues = {};
+
+		let location = queue.GuildId;
+		if (options.location != QueuerAPI.SaveLocations.Guild)
+			location = options.author;
+
+		if (savedQueues.queues[location] == undefined)
+			savedQueues.queues[location] = {};
+
+		if (savedQueues.queues[location][name] !== undefined)
+			throw new Error("A queue by that name already exists.");
+		else {
+			log.debug("Saving queue " + queue.Id);
+			savedQueues.queues[location][name] = {
+				songs: queue.ToJson()
+			};
+		}
+
+		log.debug("Writing saved queues file.");
+		WriteJson(savedQueues, "savedQueues");
+		return;
+	}
+
+	/**
+	 * Loads a queue from storage.
+	 * @param {string} guildId - The guild to load from, or the author id if not in a guild.
+	 * @param {string} name - Friendly name of the queue (think of this like a playlist name).
+	 * @param {QueueStorageOptions} [options] - Storage options, such as the guild and username.
+	 * @return {string[]|undefined} Array of jsonified songs, or undefined if there were none.
+	 */
+	LoadQueue(guildId, name, options) {
+		guildId = guildId || options?.author;
+		if (typeof guildId !== "string")
+			throw new TypeError("guildId expected string got " + (typeof guildId).toString());
+		if (typeof name !== "string")
+			throw new TypeError("name expected string got " + (typeof name).toString());
+
+		name = name.toLowerCase();
+
+		log.debug("Reading saved queues file.");
+		let savedQueues = ReadJson("savedQueues");
+		if (savedQueues == undefined)
+			return undefined;
+		if (savedQueues.queues == undefined)
+			return undefined;
+
+		if (savedQueues.queues[guildId] == undefined)
+			savedQueues.queues[guildId] = {};
+
+		if (savedQueues.queues[guildId][name] != undefined)
+			return savedQueues.queues[guildId][name];
+
+		return undefined;
+	}
+
+	/**
+	 * Deletes a queue from storage.
+	 * @param {string} guildId - The guild to load from, or the author id if not in a guild.
+	 * @param {string} name - Friendly name of the queue (think of this like a playlist name).
+	 * @param {QueueStorageOptions} [options] - Storage options, such as the guild and username.
+	 * @return {void}
+	 */
+	DeleteSavedQueue(guildId, name, options) {
+		guildId = guildId || options?.author;
+		if (typeof guildId !== "string")
+			throw new TypeError("guildId expected string got " + (typeof guildId).toString());
+		if (typeof name !== "string")
+			throw new TypeError("name expected string got " + (typeof name).toString());
+
+		name = name.toLowerCase();
+
+		log.debug("Reading saved queues file.");
+		let savedQueues = ReadJson("savedQueues");
+		if (savedQueues == undefined)
+			return;
+		if (savedQueues.queues == undefined)
+			return;
+
+		if (savedQueues.queues[guildId] == undefined)
+			savedQueues.queues[guildId] = {};
+
+		if (savedQueues.queues[guildId][name] != undefined)
+			delete savedQueues.queues[guildId][name];
+
+
+		log.debug("Writing saved queues file.");
+		WriteJson(savedQueues, "savedQueues");
+
+		return;
+	}
 
 
 	// Queuer permission strings
@@ -258,6 +431,10 @@ class QueuerAPI {
 		Load: "queuer.load",
 		LoadFromGuild: "queuer.load.guild",
 		LoadFromPersonal: "queuer.load.personal",
+		Delete: "queuer.delete",
+		DeleteFromGuild: "queuer.delete.guild",
+		DeleteFromPersonal: "queuer.delete.personal",
+
 	});
 
 	// Default queuer permissions
@@ -280,12 +457,15 @@ class QueuerAPI {
 		Remove: true,
 		Move: true,
 		Shuffle: true,
-		Save: undefined,
+		Save: true,
 		SaveToGuild: false,
 		SaveToPersonal: true,
-		Load: undefined,
+		Load: false,
 		LoadFromGuild: false,
 		LoadFromPersonal: true,
+		Delete: true,
+		DeleteFromGuild: false,
+		DeleteFromPersonal: true,
 	});
 
 	// Default queuer permissions if the user IS NOT in the queue voice channel
@@ -308,12 +488,15 @@ class QueuerAPI {
 		Remove: false,
 		Move: false,
 		Shuffle: false,
-		Save: undefined,
+		Save: true,
 		SaveToGuild: false,
 		SaveToPersonal: true,
-		Load: undefined,
+		Load: false,
 		LoadFromGuild: false,
 		LoadFromPersonal: true,
+		Delete: true,
+		DeleteFromGuild: false,
+		DeleteFromPersonal: true,
 	});
 
 	// Not permitted messages
@@ -341,7 +524,10 @@ class QueuerAPI {
 		SaveToPersonal: "You do not have permissions to save this queue for yourself.",
 		Load: "You do not have permissions to load a saved queue at all.",
 		LoadFromGuild: "You do not have permissions to load a queue from this guild's saved queues.",
-		LoadFromPersonal: "You do not have permissions to load a queue from your saved queues.",
+		LoadFromPersonal: "You do not have permissions to load a queue from your saved queues in this guild.",
+		Delete: "You do not have permissions to delete a saved queue at all.",
+		DeleteFromGuild: "You do not have permissions to delete a queue from this guild's saved queues.",
+		DeleteFromPersonal: "You do not have permissions to delete a queue from your saved queues in this guild.",
 	});
 
 }
@@ -362,13 +548,13 @@ const Queuer = new QueuerAPI();
 
 
 /**
- * @param {import('./../../bismo.js').BismoCommandExecuteData} message
+ * @param {import('./../../src/CommandExecuteData.js')} message
  */
 function MainHandler(message) {
 	var gA = function (a) { return message.args.length>a? message.args[a] : undefined; }
 
 	/** @type {Discord.VoiceChannel} */
-	let userVC = message.guild.members.cache.get(message.authorID).voice?.channel;
+	let userVC = message.voiceChannel;
 
 	let song = message.parser.IsPresent("song")? message.parser.GetArgument("song") : gA(1);
 	let queue = Queuer.GetQueue({
@@ -376,9 +562,11 @@ function MainHandler(message) {
 		voiceChannel: userVC
 	});
 
+	// Which command is this?
+	let cmd = message.args[0];
 
 	message.message.delete();
-	if (queue === undefined) {
+	if (queue === undefined && (cmd !== "load" && cmd !== "delete")) {
 		message.Reply("No queue found!");
 		return;
     }
@@ -393,70 +581,85 @@ function MainHandler(message) {
 		return true;
 	}
 	function hasPermission(permission) {
-		let perm = Queuer.HasPermission(message.guildId, message.authorID, permission);
-		let permNoVC = Queuer.HasPermission(message.guildId, message.authorID, permission + ".outsidevc");
-
 		if (userVC?.id !== queue?.VoiceChannel?.id || userVC === undefined) {
-			return permNoVC; // User has permission to preform action outside the VC?
+			// User has permission to preform action outside the VC?
+			return Queuer.HasPermission(message.guildId, message.authorId, permission + ".outsidevc");
 		} else {
-			return perm; // User has permission to preform action
+			// User has permission to preform action
+			return Queuer.HasPermission(message.guildId, message.authorId, permission);
 		}
 	}
 
-
-
-
-	// Which command is this?
-	let cmd = message.args[0];
 	// Does not require voice channel connection:
 	if (cmd == "end" || cmd == "leave" || cmd == "quit" || cmd == "destroy") {
 		if (hasPermission(Queuer.Permissions.Delete))
 			queue.Destroy();
+		else
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Delete);
 
 	} else if (cmd == "disconnect") {
 		if (hasPermission(Queuer.Permissions.Disconnect))
 			queue.Disconnect();
+		else
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Disconnect);
 
 	} else if (cmd == "play" || cmd == "resume") {
 		if (hasPermission(Queuer.Permissions.Play))
 			queue.Play(song);
+		else
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Play);
 
 	} else if (cmd == "pause") {
 		if (hasPermission(Queuer.Permissions.Pause))
 			queue.Pause();
+		else
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Pause);
 
 	} else if (cmd == "p") {
 		// play pause
 		if (!queue.Paused) {
 			if (hasPermission(Queuer.Permissions.Pause))
 				queue.Pause();
+			else
+				message.Reply(QUeuer.PermissionUnauthorizedMessages.Pause);
 		} else {
 			if (hasPermission(Queuer.Permissions.Play))
 				queue.Play(song);
+			else
+				message.Reply(QUeuer.PermissionUnauthorizedMessages.Play);
 		}
 
 	} else if (cmd == "next" || cmd == "skip") {
 		if (hasPermission(Queuer.Permissions.Next))
 			queue.Next();
+		else
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Next);
 
 	} else if (cmd == "previous" || cmd == "prev" || cmd == "back") {
 		if (hasPermission(Queuer.Permissions.Previous))
 			queue.Previous();
+		else
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Previous);
 
 	} else if (cmd == "stop") {
 		if (hasPermission(Queuer.Permissions.Stop))
 			queue.Stop();
+		else
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Stop);
 
 	} else if (cmd == "move") {
-		if (hasPermission(Queuer.Permissions.Move)) {
-			if (!message.parser.IsPresent("to"))
-				message.Reply("You need to specify `-to <song number>` in your command!");
-			if (!message.parser.IsPresent("song"))
-				message.Reply("You need to specify `-song <song number>` in your command!");
-
-			let toSong = message.parser.GetArgument("to");
-			queue.Move(song, toSong, message.parser.GetArgument("options"));
+		if (!hasPermission(Queuer.Permissions.Move)) {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Move);
+			return;
 		}
+		if (!message.parser.IsPresent("to"))
+			message.Reply("You need to specify `-to <song number>` in your command!");
+		if (!message.parser.IsPresent("song"))
+			message.Reply("You need to specify `-song <song number>` in your command!");
+
+		let toSong = message.parser.GetArgument("to");
+		queue.Move(song, toSong, message.parser.GetArgument("options"));
+
 	} else if (cmd == "shuffle") {
 		if (hasPermission(Queuer.Permissions.Shuffle)) {
 			let setting = gA(1);
@@ -469,6 +672,8 @@ function MainHandler(message) {
 				else
 					queue.Shuffle = !queue.Shuffle;
 			}
+		} else {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Shuffle);
 		}
 
 	} else if (cmd == "repeat") {
@@ -476,64 +681,162 @@ function MainHandler(message) {
 		let queueRepeatPerm = hasPermission(Queuer.Permissions.RepeatQueue);
 		let songRepeatPerm = hasPermission(Queuer.Permissions.RepeatSong);
 
-		if (repeatPerm !== false && (queueRepeatPerm !== false || songRepeatPerm !== false)) {
-			// We can either repeat the queue, song, or both.
-			let setting = gA(1);
-			if (setting !== undefined)
-				setting = setting.toLowerCase();
-
-			if (setting == "queue" || setting == "1")
-				setting = 1;
-			else if (setting == "song" || setting == "2")
-				setting = 2;
-			else if (setting == "disable" || setting == "off" || setting == "false")
-				setting = 0;
-			else {
-				// toggle
-				if (queue.Repeat == 2)
-		        	setting = 0;
-				else
-		        	setting = queue.Repeat + 1;
-			}
-
-			if (setting == 0)
-				queue.Repeat = 0;
-			else if (setting == 1) {
-				if (queueRepeatPerm === true) {
-					queue.Repeat = 1;
-				} else if (songRepeatPerm === true) {
-					queue.Repeat = 2;
-				} else {
-					queue.Repeat = 0;
-				}
-			} else if (setting == 2) {
-				if (songRepeatPerm === true) {
-					queue.Repeat = 2;
-				} else {
-					queue.Repeat = 0;
-				}
-			}
-		} else {
-			// no perm.
+		if (repeatPerm !== true && (queueRepeatPerm !== true || songRepeatPerm !== true)) {
+			message.reply(Queuer.PermissionUnauthorizedMessages.Repeat);
+			return;
 		}
+
+		// We can either repeat the queue, song, or both.
+		let setting = gA(1);
+		if (setting !== undefined)
+			setting = setting.toLowerCase();
+
+		if (setting == "queue" || setting == "1")
+			setting = 1;
+		else if (setting == "song" || setting == "2")
+			setting = 2;
+		else if (setting == "disable" || setting == "off" || setting == "false")
+			setting = 0;
+		else {
+			// toggle
+			if (queue.Repeat == 2)
+	        	setting = 0;
+			else
+	        	setting = queue.Repeat + 1;
+		}
+
+		if (setting == 0)
+			queue.Repeat = 0;
+		else if (setting == 1) {
+			if (queueRepeatPerm === true) {
+				queue.Repeat = 1;
+			} else if (songRepeatPerm === true) {
+				queue.Repeat = 2;
+			} else {
+				queue.Repeat = 0;
+			}
+		} else if (setting == 2) {
+			if (songRepeatPerm === true) {
+				queue.Repeat = 2;
+			} else {
+				queue.Repeat = 0;
+			}
+		}
+	} else if (cmd == "save") {
+		if (!hasPermission(Queuer.Permissions.Save)) {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Save);
+			return;
+		}
+
+		let location = -1;
+		if (hasPermission(Queuer.Permissions.SaveToGuild)) {
+			location = QueuerAPI.SaveLocations.Guild;
+		} else if (hasPermission(Queuer.Permissions.SaveToPersonal)) {
+			location = QueuerAPI.SaveLocations.Personal;
+		} else {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Save);
+			return;
+		}
+		let name = gA(1) || "queue";
+
+		let queue = Queuer.GetQueue({
+			guildId: message.guildId,
+			voiceChannel: message.voiceChannelId
+		})
+
+		if (queue == undefined || queue.Songs.length <= 0) {
+			message.Reply("There are no songs to save! Try adding a few songs first.");
+			return;
+		}
+
+		try {
+			Queuer.SaveQueue(queue, name, {
+				author: message.authorId,
+				location: location
+			});
+		} catch (err) {
+			if (err.message.contains("already exists")) {
+				message.Reply("Saved queue already exists, try deleting it first.");
+			} else {
+				throw err;
+			}
+		}
+	} else if (cmd == "load") {
+		if (!hasPermission(Queuer.Permissions.Load)) {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Load);
+			return;
+		}
+
+		let location = -1;
+		if (hasPermission(Queuer.Permissions.SaveToGuild)) {
+			location = QueuerAPI.SaveLocations.Guild;
+		} else if (hasPermission(Queuer.Permissions.SaveToPersonal)) {
+			location = QueuerAPI.SaveLocations.Personal;
+		} else {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Save);
+			return;
+		}
+		let name = gA(1) || "queue";
+
+		let queue = Queuer.CreateQueue(message.voiceChannel, {
+			authorId: message.authorId
+		});
+		if (queue == undefined) {
+			message.Reply("Unable to create the queue 😕");
+			return;
+		}
+
+		let loadedAnySongs = queue.Load(name, message.authorId, {
+			location: location,
+		});
+
+		if (!loadedAnySongs)
+			message.Reply("No saved queue found!");
+		
+	} else if (cmd == "delete") {
+		if (!hasPermission(Queuer.Permissions.Load)) {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Load);
+			return;
+		}
+
+		let location = -1;
+		let storageUserId = message.guildId;
+		if (hasPermission(Queuer.Permissions.SaveToGuild)) {
+			location = QueuerAPI.SaveLocations.Guild;
+		} else if (hasPermission(Queuer.Permissions.SaveToPersonal)) {
+			location = QueuerAPI.SaveLocations.Personal;
+			storageUserId = message.authorId;
+		} else {
+			message.Reply(Queuer.PermissionUnauthorizedMessages.Save);
+			return;
+		}
+		let name = gA(1) || "queue";
+		Queuer.DeleteSavedQueue(storageUserId, name, {
+			location: location,
+			author: message.authorId,
+		});
 	}
 
+
+	message.End();
 }
 
 
 
 /**
- * @param {import('./../../bismo.js').BismoCommandExecuteData} message
+ * @param {import('./../../src/CommandExecuteData.js')} message
  */
 function PlayAttachedFile(message) {
-	let voiceChannel = message.message.member.voice.channel;
-	if (!voiceChannel)
+	let voiceChannel = message.voiceChannel;
+	if (!voiceChannel || voiceChannel == undefined)
 		return message.Reply("You must join a voice channel first.");
 
 	let permissions = voiceChannel.permissionsFor(message.message.client.user);
  	if (!permissions.has("CONNECT") || !permissions.has("SPEAK")) {
 		return message.Reply("I cannot join and speak in your voice channel, try a different one.");
 	}
+
+	console.log(message.message.member.voice);
 
 	message.message.delete();
 
@@ -550,6 +853,7 @@ function PlayAttachedFile(message) {
 	if (url !== undefined && message.guild !== undefined) {
 		let song = new Song((title !== undefined? title : url), {
 			AddedByUserId: message.author.id,
+			AddedByUserName: message.author.displayName,
 			Artist: message.author.username,
 			Duration: 0,
 		}, {
@@ -570,10 +874,13 @@ function PlayAttachedFile(message) {
 
 
 /**
- * @param {BismoRequests} Requests
+ * @param {Bismo.PluginSetupObject} requests
  */
-function main(Requests) {
-	Bismo = Requests.Bismo // The Bismo API
+function main(requests) {
+	Bismo = requests.Bismo // The Bismo API
+	log = requests.Log;
+	ReadJson = requests.ReadJson;
+	WriteJson = requests.WriteJson;
 
 	Bismo.RegisterCommand("q", MainHandler, {
 		description: "Manage the voice channel audio queue.",
@@ -624,7 +931,7 @@ module.exports = {
 	main: main,
 	manifest: {
 		name: "Queuer",
-		packageName: "com.watsuprico.queuer",
+		packageName: "com.bismo.queuer",
 		author: "Watsuprico",
 		date: "12/12/2022",
 		version: "2.1"
